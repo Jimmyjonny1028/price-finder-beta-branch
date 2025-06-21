@@ -1,4 +1,4 @@
-// server.js (DEFINITIVE FIX - Precisely matches the working curl request)
+// server.js (DEFINITIVE FIX - No Duplicate Functions, No Currency Filter)
 
 const express = require('express');
 const axios = require('axios');
@@ -20,22 +20,31 @@ const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =================================================================
-// ALL HELPER FUNCTIONS (No changes here)
+// ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
 // =================================================================
+
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
-function formatImageUrl(url) { /* ... */ }
-const filterByCurrency = (results) => { /* ... */ };
-const filterUbuyFromGoogle = (results) => { /* ... */ };
-const filterForEnglish = (results) => { /* ... */ };
-const filterForIrrelevantAccessories = (results) => { /* ... */ };
-const filterForMainDevice = (results) => { /* ... */ };
-const filterByPriceAnomalies = (results) => { /* ... */ };
-const filterResultsByQuery = (results, query) => { /* ... */ };
-const detectSearchIntent = (query) => { /* ... */ };
-function cleanGoogleUrl(googleUrl) { /* ... */ }
+
+function formatImageUrl(url) {
+    const placeholder = 'https://via.placeholder.com/150/F0F2F5/333333?text=No+Image';
+    if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+        return placeholder;
+    }
+    return url;
+}
+
+const filterUbuyFromGoogle = (results) => { const ubuyStoreName = 'ubuy'; const googleShoppingSource = 'google_shopping'; return results.filter(item => { const itemSource = item.source ? item.source.toLowerCase() : ''; const itemStore = item.store ? item.store.toLowerCase() : ''; if (itemSource.includes(googleShoppingSource) && itemStore.includes(ubuyStoreName)) { return false; } return true; }); };
+const filterForEnglish = (results) => { const isNotEnglishRegex = /[^\u0020-\u007E]/; return results.filter(item => !isNotEnglishRegex.test(item.title)); };
+const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
+const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
+const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
+const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
+const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
+function cleanGoogleUrl(googleUrl) { if (!googleUrl || !googleUrl.includes('?q=')) return googleUrl; try { const url = new URL(googleUrl); return url.searchParams.get('q') || googleUrl; } catch (e) { return googleUrl; } }
+
 
 // =================================================================
-// MAIN SEARCH ROUTE (No changes here)
+// MAIN SEARCH ROUTE
 // =================================================================
 
 app.get('/search', async (req, res) => {
@@ -64,8 +73,8 @@ app.get('/search', async (req, res) => {
         let allResults = [...pricerResults, ...priceApiComResults].filter(item => item.price !== null && !isNaN(item.price));
         console.log(`Received ${allResults.length} initial valid results.`);
         
-        const currencyFiltered = filterByCurrency(allResults);
-        const filteredForUbuy = filterUbuyFromGoogle(currencyFiltered);
+        // Removed the currency filter call
+        const filteredForUbuy = filterUbuyFromGoogle(allResults);
         const languageFiltered = filterForEnglish(filteredForUbuy);
 
         let finalFilteredResults;
@@ -91,41 +100,25 @@ app.get('/search', async (req, res) => {
     }
 });
 
-
 // =================================================================
 // API CALLING FUNCTIONS
 // =================================================================
 
-async function searchPricerAPI(query) { /* ... unchanged ... */ }
+async function searchPricerAPI(query) {
+    try {
+        const regionalQuery = `${query} australia`;
+        const response = await axios.request({ method: 'GET', url: 'https://pricer.p.rapidapi.com/str', params: { q: regionalQuery }, headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' } });
+        return response.data.map(item => ({ source: 'Pricer', title: item?.title || 'Title Not Found', price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null, price_string: item?.price || 'N/A', url: cleanGoogleUrl(item?.link), image: formatImageUrl(item?.img), store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified' }));
+    } catch (err) { console.error("Pricer API search failed:", err.message); return []; }
+}
 
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
-        // --- THE FIX IS HERE ---
-        // I have restructured the jobs to precisely match the working curl command.
         const jobsToSubmit = [
-            // Amazon job remains as 'product_and_offers'
-            {
-                source: 'amazon',
-                topic: 'product_and_offers',
-                key: 'term',
-                values: query
-            },
-            // eBay and Google Shopping jobs now match the curl structure
-            {
-                source: 'ebay',
-                topic: 'search_results',
-                key: 'term',
-                values: query,
-                condition: 'any' // Added for stability
-            },
-            {
-                source: 'google_shopping', // FIX: Corrected name with underscore
-                topic: 'search_results',
-                key: 'term',
-                values: query,
-                condition: 'any' // FIX: Added required parameter
-            }
+            { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
+            { source: 'ebay', topic: 'search_results', key: 'term', values: query, condition: 'any' },
+            { source: 'google_shopping', topic: 'search_results', key: 'term', values: query, condition: 'any' }
         ];
 
         const jobPromises = jobsToSubmit.map(job =>
@@ -175,18 +168,3 @@ async function searchPriceApiCom(query) {
 }
 
 app.listen(PORT, () => console.log(`Server is running! Open your browser to http://localhost:${PORT}`));
-
-// =================================================================
-// Full helper function definitions for completeness
-// =================================================================
-function formatImageUrl(url) { const placeholder = 'https://via.placeholder.com/150/F0F2F5/333333?text=No+Image'; if (!url || typeof url !== 'string' || !url.startsWith('http')) { return placeholder; } return url; }
-const filterByCurrency = (results) => { const foreignCurrencyRegex = /[£€]/; return results.filter(item => { return item.price_string && !foreignCurrencyRegex.test(item.price_string); }); };
-const filterUbuyFromGoogle = (results) => { const ubuyStoreName = 'ubuy'; const googleShoppingSource = 'google_shopping'; return results.filter(item => { const itemSource = item.source ? item.source.toLowerCase() : ''; const itemStore = item.store ? item.store.toLowerCase() : ''; if (itemSource.includes(googleShoppingSource) && itemStore.includes(ubuyStoreName)) { return false; } return true; }); };
-const filterForEnglish = (results) => { const isNotEnglishRegex = /[^\u0020-\u007E]/; return results.filter(item => !isNotEnglishRegex.test(item.title)); };
-const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
-const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
-const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
-const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
-const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
-function cleanGoogleUrl(googleUrl) { if (!googleUrl || !googleUrl.includes('?q=')) return googleUrl; try { const url = new URL(googleUrl); return url.searchParams.get('q') || googleUrl; } catch (e) { return googleUrl; } }
-async function searchPricerAPI(query) { try { const regionalQuery = `${query} australia`; const response = await axios.request({ method: 'GET', url: 'https://pricer.p.rapidapi.com/str', params: { q: regionalQuery }, headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' } }); return response.data.map(item => ({ source: 'Pricer', title: item?.title || 'Title Not Found', price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null, price_string: item?.price || 'N/A', url: cleanGoogleUrl(item?.link), image: formatImageUrl(item?.img), store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified' })); } catch (err) { console.error("Pricer API search failed:", err.message); return []; } }
