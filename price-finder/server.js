@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - CORRECTED)
+// server.js (FINAL WORKING VERSION - FULLY TARGETING AUSTRALIA)
 
 const express = require('express');
 const axios = require('axios');
@@ -32,7 +32,7 @@ app.get('/search', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Search query is required' });
 
-    console.log(`Starting multi-source smart search for: ${query}`);
+    console.log(`Starting multi-source Australian search for: ${query}`);
     try {
         const [pricerResults, priceApiComResults] = await Promise.all([
             searchPricerAPI(query),
@@ -66,18 +66,22 @@ function cleanGoogleUrl(googleUrl) {
     }
 }
 
+// --- Pricer API Helper - MODIFIED FOR AUSTRALIA ---
 async function searchPricerAPI(query) {
     try {
-        console.log("Calling Pricer API...");
+        // We add "australia" to the query to hint the location
+        const regionalQuery = `${query} australia`;
+        console.log(`Calling Pricer API with regional query: "${regionalQuery}"`);
+        
         const response = await axios.request({
             method: 'GET',
             url: 'https://pricer.p.rapidapi.com/str',
-            params: { q: query },
+            params: { q: regionalQuery }, // Use the modified query
             headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
         });
 
         return response.data.map(item => ({
-            source: 'Pricer API',
+            source: 'Pricer API (AU Hint)',
             title: item.title || 'Title Not Found',
             price: item.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
             price_string: item.price || 'N/A',
@@ -91,19 +95,18 @@ async function searchPricerAPI(query) {
     }
 }
 
-// --- UPGRADED API Helper 2: PriceAPI.com (Amazon, Google Shopping, eBay) ---
+// --- PriceAPI.com Helper - SET TO AUSTRALIA ---
 async function searchPriceApiCom(query) {
-    // CORRECTED: 'google_shopping' with an underscore
     const sources = ['amazon', 'google_shopping', 'ebay'];
     let allResults = [];
 
     try {
-        console.log(`Submitting jobs for sources: ${sources.join(', ')}`);
+        console.log(`Submitting jobs for AU sources: ${sources.join(', ')}`);
         const jobPromises = sources.map(source => 
             axios.post('https://api.priceapi.com/v2/jobs', {
                 token: PRICEAPI_COM_KEY,
                 source: source,
-                country: 'us',
+                country: 'au', // Explicitly set to Australia
                 topic: 'product_and_offers',
                 key: 'term',
                 values: query,
@@ -160,7 +163,6 @@ async function searchPriceApiCom(query) {
         return [];
     }
 }
-
 
 app.listen(PORT, () => {
     console.log(`Server is running! Open your browser to http://localhost:${PORT}`);
