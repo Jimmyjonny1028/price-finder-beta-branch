@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - STRICTLY AUSTRALIAN)
+// server.js (FINAL WORKING VERSION - HINT AND STRICTLY FILTER)
 
 const express = require('express');
 const axios = require('axios');
@@ -38,14 +38,21 @@ app.get('/search', async (req, res) => {
         ]);
 
         const allResults = [...pricerResults, ...priceApiComResults];
-        console.log(`Received ${allResults.length} initial results.`);
+        console.log(`Received ${allResults.length} initial results from all sources.`);
 
-        // --- FINAL AUSTRALIAN SAFETY FILTER ---
-        // We only keep results where the URL is a .com.au domain OR
-        // the result came from PriceAPI.com (which we know we configured for 'au').
-        const australianResults = allResults.filter(item => 
-            (item.url && item.url.includes('.com.au')) || item.source.startsWith('PriceAPI')
-        );
+        // --- NEW, STRICT AUSTRALIAN SAFETY FILTER ---
+        const australianResults = allResults.filter(item => {
+            // Trust PriceAPI.com results implicitly because we set country='au'
+            if (item.source.startsWith('PriceAPI')) {
+                return true;
+            }
+            // For all other APIs, be very strict and require a .com.au URL
+            if (item.url && item.url.includes('.com.au')) {
+                return true;
+            }
+            // If neither condition is met, discard the result
+            return false;
+        });
         console.log(`Kept ${australianResults.length} results after strict Australian filtering.`);
 
         const filteredResults = filterResultsByQuery(australianResults, query);
@@ -73,12 +80,12 @@ function cleanGoogleUrl(googleUrl) {
     }
 }
 
-// --- Pricer API Helper - FORCED AUSTRALIA SEARCH ---
+// --- Pricer API Helper - REVERTED to "hint" method ---
 async function searchPricerAPI(query) {
     try {
-        // This forces the search to only look at .com.au sites
-        const regionalQuery = `${query} site:.com.au`;
-        console.log(`Calling Pricer API with FORCED regional query: "${regionalQuery}"`);
+        // We add "australia" to the query as a HINT, not a demand.
+        const regionalQuery = `${query} australia`;
+        console.log(`Calling Pricer API with regional hint: "${regionalQuery}"`);
         
         const response = await axios.request({
             method: 'GET',
@@ -102,7 +109,7 @@ async function searchPricerAPI(query) {
     }
 }
 
-// --- PriceAPI.com Helper - SET TO AUSTRALIA ---
+// --- PriceAPI.com Helper - Correctly set to Australia ---
 async function searchPriceApiCom(query) {
     const sources = ['amazon', 'google_shopping', 'ebay'];
     let allResults = [];
@@ -113,7 +120,7 @@ async function searchPriceApiCom(query) {
             axios.post('https://api.priceapi.com/v2/jobs', {
                 token: PRICEAPI_COM_KEY,
                 source: source,
-                country: 'au', // Explicitly set to Australia
+                country: 'au',
                 topic: 'product_and_offers',
                 key: 'term',
                 values: query,
