@@ -1,4 +1,4 @@
-// server.js (FINAL INTELLIGENT VERSION)
+// server.js (FINAL CRASH-PROOF VERSION)
 
 const express = require('express');
 const axios = require('axios');
@@ -26,7 +26,6 @@ const filterResultsByQuery = (results, query) => {
     });
 };
 
-// --- NEW, POWERFUL ANTI-ACCESSORY FILTER ---
 const filterForIrrelevantAccessories = (results) => {
     const negativeKeywords = [
         'strap', 'band', 'protector', 'case', 'charger', 'cable', 
@@ -34,7 +33,6 @@ const filterForIrrelevantAccessories = (results) => {
     ];
     return results.filter(item => {
         const itemTitle = item.title.toLowerCase();
-        // Return true (keep the item) if NONE of the negative keywords are found in the title
         return !negativeKeywords.some(keyword => itemTitle.includes(keyword));
     });
 };
@@ -53,7 +51,6 @@ app.get('/search', async (req, res) => {
         const allResults = [...pricerResults, ...priceApiComResults];
         console.log(`Received ${allResults.length} initial results from all sources.`);
 
-        // --- APPLY THE NEW IRRELEVANCE FILTER ---
         const relevantResults = filterForIrrelevantAccessories(allResults);
         console.log(`Kept ${relevantResults.length} results after accessory filtering.`);
         
@@ -107,15 +104,11 @@ async function searchPricerAPI(query) {
     }
 }
 
-// --- UPGRADED API Helper 2: PriceAPI.com (Mixed Topics) ---
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
-        // Define the specific job for each source
         const jobsToSubmit = [
-            // Use the more specific 'product_and_offers' for Amazon
             { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
-            // Use the broader 'search_results' for eBay and Google Shopping
             { source: 'ebay', topic: 'search_results', key: 'term', values: query },
             { source: 'google_shopping', topic: 'search_results', key: 'term', values: query }
         ];
@@ -126,7 +119,7 @@ async function searchPriceApiCom(query) {
                 token: PRICEAPI_COM_KEY,
                 country: 'au',
                 max_pages: 1,
-                ...job // Spread the job-specific details
+                ...job
             }).then(res => ({ ...res.data, source: job.source, topic: job.topic }))
             .catch(err => {
                 console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
@@ -154,7 +147,6 @@ async function searchPriceApiCom(query) {
 
         for (const data of downloadedResults) {
             let products = [];
-            // Handle the two different data structures
             if (data.topic === 'product_and_offers') {
                 products = data.results[0]?.products || [];
                 const mapped = products.map(item => ({
@@ -167,14 +159,15 @@ async function searchPriceApiCom(query) {
                 allResults = allResults.concat(mapped);
             } else if (data.topic === 'search_results') {
                 products = data.results || [];
+                // --- THIS IS THE CORRECTED, CRASH-PROOF MAPPING ---
                 const mapped = products.map(item => ({
                     source: `PriceAPI (${data.source})`,
-                    title: item.search_result.name || 'Title Not Found',
-                    price: parseFloat(item.search_result.min_price) || null,
-                    price_string: item.search_result.min_price ? `$${item.search_result.min_price}` : 'N/A',
-                    url: item.search_result.url || '#',
-                    image: item.search_result.image_url || 'https://via.placeholder.com/100',
-                    store: data.source // The CSV doesn't specify a seller, so we use the source name
+                    title: item.search_result?.name || 'Title Not Found',
+                    price: parseFloat(item.search_result?.min_price) || null,
+                    price_string: item.search_result?.min_price ? `$${item.search_result.min_price}` : 'N/A',
+                    url: item.search_result?.url || '#',
+                    image: item.search_result?.image_url || 'https://via.placeholder.com/100',
+                    store: data.source
                 }));
                 allResults = allResults.concat(mapped);
             }
