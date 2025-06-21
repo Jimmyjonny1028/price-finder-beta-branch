@@ -1,9 +1,10 @@
-// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING & 5-SECOND DELAYS)
+// server.js (Apify Version - NO DELAY)
 
 const express = require('express');
 const axios = require('axios');
-const cors = require('cors');
+const cors =require('cors');
 require('dotenv').config();
+const { ApifyClient } = require('apify-client');
 
 const app = express();
 const PORT = 5000;
@@ -11,212 +12,118 @@ const PORT = 5000;
 app.use(cors());
 app.use(express.static('public'));
 
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
-const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
+// --- API Keys ---
+const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN;
 
-const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// --- Initialize Apify Client ---
+const apifyClient = new ApifyClient({
+    token: APIFY_API_TOKEN,
+});
 
-const filterResultsByQuery = (results, query) => {
-    const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 1 && isNaN(word));
-    if (queryKeywords.length === 0) return results;
-    return results.filter(item => item.title.toLowerCase().includes(queryKeywords.join(' ')));
-};
-
-const filterForIrrelevantAccessories = (results) => {
-    const negativeKeywords = [
-        'strap', 'band', 'protector', 'case', 'charger', 'cable', 
-        'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide',
-        'replacement', 'for '
-    ];
-    return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return !negativeKeywords.some(keyword => itemTitle.includes(keyword));
-    });
-};
-
+// --- Main Search Route ---
 app.get('/search', async (req, res) => {
     const { query } = req.query;
-    if (!query) return res.status(400).json({ error: 'Search query is required' });
+    if (!query) {
+        return res.status(400).json({ error: 'Search query is required' });
+    }
 
-    console.log(`Starting multi-source smart search for: ${query}`);
+    console.log(`Starting hybrid search for: ${query}`);
     try {
-        const [pricerResults, priceApiComResults] = await Promise.all([
-            searchPricerAPI(query),
-            searchPriceApiCom(query)
+        // We will combine results from the free eBay API and our free Apify Actors
+        const [ebayResults, apifyResults] = await Promise.all([
+            searchEbayAPI(query),    // Your high-volume eBay function
+            searchApify(query)       // Your broad-search Apify function
         ]);
 
-        const allResults = [...pricerResults, ...priceApiComResults];
-        console.log(`Received ${allResults.length} initial results from all sources.`);
+        const allResults = [...ebayResults, ...apifyResults];
+        console.log(`Received ${allResults.length} total results.`);
 
-        const relevantResults = filterForIrrelevantAccessories(allResults);
-        console.log(`Kept ${relevantResults.length} results after accessory filtering.`);
-        
-        const filteredResults = filterResultsByQuery(relevantResults, query);
-        console.log(`Kept ${filteredResults.length} results after keyword filtering.`);
-
-        const validResults = filteredResults.filter(item => item.price !== null && !isNaN(item.price));
+        // ... (Filtering and sorting logic can be added back here if needed)
+        const validResults = allResults.filter(item => item.title && item.price && !isNaN(item.price));
         console.log(`Found ${validResults.length} valid, sorted offers.`);
-
         const sortedResults = validResults.sort((a, b) => a.price - b.price);
 
         res.json(sortedResults);
+
     } catch (error) {
         console.error("Error in the main search handler:", error);
         res.status(500).json({ error: 'Failed to fetch data from APIs' });
     }
 });
 
-function cleanGoogleUrl(googleUrl) {
-    if (!googleUrl || !googleUrl.includes('?q=')) return googleUrl;
-    try {
-        const url = new URL(googleUrl);
-        return url.searchParams.get('q') || googleUrl;
-    } catch (e) {
-        return googleUrl;
-    }
-}
 
-async function searchPricerAPI(query) {
-    // This function remains unchanged
+// --- Apify function using ONLY Free-Tier-Compatible Actors (No Delays) ---
+async function searchApify(query) {
+    console.log("Starting Apify searches (Google & Amazon)...");
+
+    // Inputs for the free-tier compatible Actors
+    const googleShoppingInput = { queries: query, countryCode: 'au', maxResults: 15 };
+    const amazonInput = {
+        keywords: [query],
+        country: 'AU',
+        max_results: 15,
+        category: 'ALL'
+    };
+
     try {
-        const regionalQuery = `${query} australia`;
-        console.log(`Calling Pricer API with regional hint: "${regionalQuery}"`);
-        const response = await axios.request({
-            method: 'GET',
-            url: 'https://pricer.p.rapidapi.com/str',
-            params: { q: regionalQuery },
-            headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
-        });
-        return response.data.map(item => ({
-            source: 'Pricer API',
-            title: item?.title || 'Title Not Found',
-            price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
-            price_string: item?.price || 'N/A',
-            url: cleanGoogleUrl(item?.link),
-            image: item?.img || 'https://via.placeholder.com/100',
-            store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified'
+        // Run the Apify Actors in parallel
+        console.log("Submitting Apify jobs in parallel...");
+        const [googleRun, amazonRun] = await Promise.all([
+            apifyClient.actor("apify/google-shopping-scraper").call(googleShoppingInput),
+            apifyClient.actor("natours/amazon-scraper").call(amazonInput)
+        ]);
+
+        console.log("Apify jobs submitted. Fetching results...");
+
+        // Fetch results from both datasets in parallel
+        const [googleDataset, amazonDataset] = await Promise.all([
+             apifyClient.dataset(googleRun.defaultDatasetId).listItems(),
+             apifyClient.dataset(amazonRun.defaultDatasetId).listItems()
+        ]);
+
+        const googleItems = googleDataset.items;
+        const amazonItems = amazonDataset.items;
+
+        // Map results to our standard format
+        const googleResults = googleItems.flatMap(r => r.results || []).map(item => ({
+            source: 'Apify (Google)',
+            title: item.title,
+            price: item.price,
+            price_string: item.priceString,
+            url: item.url,
+            image: item.thumbnail,
+            store: item.merchant?.name || 'Google Shopping'
         }));
-    } catch (err) {
-        console.error("Pricer API search failed:", err.message);
-        return [];
+
+        const amazonResults = amazonItems.map(item => ({
+            source: 'Apify (Amazon)',
+            title: item.title,
+            price: item.price,
+            price_string: item.price_string || (item.price ? `$${item.price}` : 'N/A'),
+            url: item.url,
+            image: item.image,
+            store: 'Amazon'
+        }));
+
+        const allApifyResults = [...googleResults, ...amazonResults];
+        console.log(`Retrieved ${allApifyResults.length} valid results from Apify.`);
+
+        return allApifyResults;
+    } catch (error) {
+        console.error("An error occurred during Apify operations:", error);
+        return []; // Return empty array on failure
     }
 }
 
-// --- UPDATED FUNCTION WITH 5-SECOND DELAYS FOR SUBMISSION AND DOWNLOADING ---
-async function searchPriceApiCom(query) {
-    let allResults = [];
-    try {
-        const jobsToSubmit = [
-            { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
-            { source: 'ebay', topic: 'search_results', key: 'term', values: query },
-            { source: 'google_shopping', topic: 'search_results', key: 'term', values: query }
-        ];
 
-        console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com sequentially...`);
-        
-        const jobResponses = [];
-        for (const job of jobsToSubmit) {
-            try {
-                console.log(`Submitting job for source: ${job.source}...`);
-                const res = await axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', max_pages: 1, ...job });
-                jobResponses.push({ ...res.data, source: job.source, topic: job.topic });
-                console.log(`Job for ${job.source} submitted. Waiting 5 seconds...`);
-                await wait(5000); // Wait 5 seconds before the next submission
-            } catch (err) {
-                 console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
-            }
-        }
-        
-        if (jobResponses.length === 0) {
-            console.log("No jobs were successfully submitted to PriceAPI.com.");
-            return [];
-        }
-        
-        console.log(`Jobs submitted. IDs: ${jobResponses.map(j => j.job_id).join(', ')}. Waiting for processing...`);
-        await wait(30000);
-
-        // --- START: The Second Fix (Sequential Downloading) ---
-        console.log("Fetching results for completed jobs sequentially...");
-        const downloadedResults = [];
-        for (const job of jobResponses) {
-            try {
-                console.log(`Fetching results for job ID ${job.job_id} (${job.source})...`);
-                const res = await axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } });
-                downloadedResults.push({ ...res.data, source: job.source, topic: job.topic });
-                console.log(`Results for ${job.source} downloaded. Waiting 5 seconds...`);
-                await wait(5000); // Wait 5 seconds before the next download
-            } catch (err) {
-                console.error(`Failed to fetch results for job ID ${job.job_id} (${job.source})`, err.response?.data?.message || err.message);
-            }
-        }
-        // --- END: The Second Fix ---
-
-        for (const data of downloadedResults) {
-            let mapped = [];
-            const sourceName = data.source;
-            const topic = data.topic;
-
-            if (sourceName === 'amazon' && topic === 'product_and_offers') {
-                const content = data.results?.[0]?.content;
-                if (content && content.buybox && content.buybox.min_price) {
-                    mapped.push({
-                        source: `PriceAPI (Amazon)`,
-                        title: content.name || 'Title Not Found',
-                        price: parseFloat(content.buybox.min_price),
-                        price_string: `$${parseFloat(content.buybox.min_price).toFixed(2)}`,
-                        url: content.url || '#',
-                        image: content.image_url || 'https://via.placeholder.com/100',
-                        store: content.buybox.shop_name || 'Amazon'
-                    });
-                }
-            } 
-            else if (topic === 'search_results') {
-                const searchResults = data.results?.[0]?.content?.search_results || [];
-                
-                mapped = searchResults.map(item => {
-                    let price = null;
-                    let price_string = 'N/A';
-                    const store = item.shop_name || sourceName;
-
-                    if (item.type === 'offer' && item.price) {
-                        price = parseFloat(item.price_with_shipping) || parseFloat(item.price);
-                        price_string = `$${parseFloat(item.price).toFixed(2)}`;
-                        const shipping = parseFloat(item.shipping_costs);
-                        if (shipping > 0) {
-                            price_string += ` + $${shipping.toFixed(2)} ship`;
-                        }
-                    }
-                    else if ((item.type === 'product' || item.type === 'offer_cluster') && item.min_price) {
-                        price = parseFloat(item.min_price);
-                        price_string = `From $${price.toFixed(2)}`;
-                    }
-
-                    if (item.name && price !== null) {
-                        return {
-                            source: `PriceAPI (${sourceName})`,
-                            title: item.name,
-                            price: price,
-                            price_string: price_string,
-                            url: item.url || '#',
-                            image: item.img_url || 'https://via.placeholder.com/100',
-                            store: store
-                        };
-                    }
-                    return null;
-                }).filter(Boolean);
-            }
-            
-            const validMapped = mapped.filter(item => item.title && item.price);
-            allResults = allResults.concat(validMapped);
-        }
-        console.log(`Retrieved ${allResults.length} valid results from PriceAPI.com sources.`);
-        return allResults;
-
-    } catch (err) {
-        console.error("A critical error occurred in the searchPriceApiCom function:", err.message);
-        return [];
-    }
+// --- TODO: Your function for the official eBay API ---
+async function searchEbayAPI(query) {
+    console.log("Searching eBay via official API...");
+    // This is where you will implement the OAuth flow and call the eBay Browse API.
+    // This will provide your 5,000 free daily searches.
+    return [];
 }
+
 
 app.listen(PORT, () => {
     console.log(`Server is running! Open your browser to http://localhost:${PORT}`);
