@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: price-finder
+    env: node
+    plan: free # Change this if you need more RAM
+    buildCommand: "npm install && npx playwright install --with-deps"
+    startCommand: "node server.js"
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20 # Using a recent, stable Node version
+      - fromGroup: price-finder-env
