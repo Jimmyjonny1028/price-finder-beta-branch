@@ -1,4 +1,4 @@
-// server.js (FINAL CRASH-PROOF VERSION)
+// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING)
 
 const express = require('express');
 const axios = require('axios');
@@ -19,11 +19,7 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const filterResultsByQuery = (results, query) => {
     const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 1 && isNaN(word));
     if (queryKeywords.length === 0) return results;
-
-    return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return queryKeywords.every(keyword => itemTitle.includes(keyword));
-    });
+    return results.filter(item => item.title.toLowerCase().includes(queryKeywords.join(' ')));
 };
 
 const filterForIrrelevantAccessories = (results) => {
@@ -91,12 +87,12 @@ async function searchPricerAPI(query) {
         });
         return response.data.map(item => ({
             source: 'Pricer API',
-            title: item.title || 'Title Not Found',
-            price: item.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
-            price_string: item.price || 'N/A',
-            url: cleanGoogleUrl(item.link),
-            image: item.img || 'https://via.placeholder.com/100',
-            store: item.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified'
+            title: item?.title || 'Title Not Found',
+            price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
+            price_string: item?.price || 'N/A',
+            url: cleanGoogleUrl(item?.link),
+            image: item?.img || 'https://via.placeholder.com/100',
+            store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified'
         }));
     } catch (err) {
         console.error("Pricer API search failed:", err.message);
@@ -115,12 +111,8 @@ async function searchPriceApiCom(query) {
 
         console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com...`);
         const jobPromises = jobsToSubmit.map(job =>
-            axios.post('https://api.priceapi.com/v2/jobs', {
-                token: PRICEAPI_COM_KEY,
-                country: 'au',
-                max_pages: 1,
-                ...job
-            }).then(res => ({ ...res.data, source: job.source, topic: job.topic }))
+            axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', max_pages: 1, ...job })
+            .then(res => ({ ...res.data, source: job.source, topic: job.topic }))
             .catch(err => {
                 console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
                 return null;
@@ -146,33 +138,37 @@ async function searchPriceApiCom(query) {
         const downloadedResults = (await Promise.all(resultPromises)).filter(Boolean);
 
         for (const data of downloadedResults) {
-            let products = [];
+            let mapped = [];
             if (data.topic === 'product_and_offers') {
-                products = data.results[0]?.products || [];
-                const mapped = products.map(item => ({
+                // Safely access the nested products array
+                const products = data.results?.[0]?.products || [];
+                mapped = products.map(item => ({
                     source: `PriceAPI (${data.source})`,
-                    title: item.name || 'Title Not Found', price: item.price,
-                    price_string: item.offer?.price_string || (item.price ? `$${item.price.toFixed(2)}` : 'N/A'),
-                    url: item.url || '#', image: item.image || 'https://via.placeholder.com/100',
-                    store: item.shop?.name || data.source
+                    title: item?.name || 'Title Not Found',
+                    price: item?.price,
+                    price_string: item?.offer?.price_string || (item?.price ? `$${item.price.toFixed(2)}` : 'N/A'),
+                    url: item?.url || '#',
+                    image: item?.image || 'https://via.placeholder.com/100',
+                    store: item?.shop?.name || data.source
                 }));
-                allResults = allResults.concat(mapped);
             } else if (data.topic === 'search_results') {
-                products = data.results || [];
-                // --- THIS IS THE CORRECTED, CRASH-PROOF MAPPING ---
-                const mapped = products.map(item => ({
+                // Safely access the results array for this topic
+                const products = data.results || [];
+                mapped = products.map(item => ({
                     source: `PriceAPI (${data.source})`,
-                    title: item.search_result?.name || 'Title Not Found',
-                    price: parseFloat(item.search_result?.min_price) || null,
-                    price_string: item.search_result?.min_price ? `$${item.search_result.min_price}` : 'N/A',
-                    url: item.search_result?.url || '#',
-                    image: item.search_result?.image_url || 'https://via.placeholder.com/100',
+                    title: item?.search_result?.name || 'Title Not Found',
+                    price: parseFloat(item?.search_result?.min_price) || null,
+                    price_string: item?.search_result?.min_price ? `$${item.search_result.min_price}` : 'N/A',
+                    url: item?.search_result?.url || '#',
+                    image: item?.search_result?.image_url || 'https://via.placeholder.com/100',
                     store: data.source
                 }));
-                allResults = allResults.concat(mapped);
             }
+            // Filter out any results that are completely empty after mapping
+            const validMapped = mapped.filter(item => item.title && item.price);
+            allResults = allResults.concat(validMapped);
         }
-        console.log(`Retrieved ${allResults.length} results from PriceAPI.com sources.`);
+        console.log(`Retrieved ${allResults.length} valid results from PriceAPI.com sources.`);
         return allResults;
 
     } catch (err) {
