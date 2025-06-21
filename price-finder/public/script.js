@@ -1,7 +1,8 @@
-// public/script.js (FINAL WORKING VERSION)
+// public/script.js (FINAL STABLE VERSION)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
+const searchButton = document.getElementById('search-button'); // Get the button
 const resultsContainer = document.getElementById('results-container');
 const loader = document.getElementById('loader');
 const loaderText = document.querySelector('#loader p');
@@ -16,6 +17,8 @@ async function handleSearch(event) {
         return;
     }
     
+    // --- STABILITY IMPROVEMENT ---
+    searchButton.disabled = true; // Disable button to prevent multiple searches
     loaderText.textContent = 'Searching multiple providers... this may take up to 35 seconds.';
     loader.classList.remove('hidden');
     resultsContainer.innerHTML = '';
@@ -38,7 +41,9 @@ async function handleSearch(event) {
         console.error("Failed to fetch data:", error);
         resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
     } finally {
+        // --- STABILITY IMPROVEMENT ---
         loader.classList.add('hidden');
+        searchButton.disabled = false; // Re-enable the button
     }
 }
 
@@ -54,9 +59,10 @@ function displayResults(results, searchTerm) {
             ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"`
             : `href="#" class="disabled-link"`; 
 
+        // The onerror handler is crucial for fixing broken image links from the API.
         card.innerHTML = `
             <div class="result-image">
-                <img src="${offer.image}" alt="${offer.store}" onerror="this.src='https://via.placeholder.com/100';">
+                <img src="${offer.image}" alt="${offer.store}" onerror="this.onerror=null;this.src='https://via.placeholder.com/150';">
             </div>
             <div class="result-info">
                 <h3>${offer.title}</h3>
