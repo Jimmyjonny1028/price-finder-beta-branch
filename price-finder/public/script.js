@@ -1,8 +1,8 @@
-// public/script.js (FINAL STABLE VERSION)
+// public/script.js (With Improved Image Error Handling)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
-const searchButton = document.getElementById('search-button'); // Get the button
+const searchButton = document.getElementById('search-button');
 const resultsContainer = document.getElementById('results-container');
 const loader = document.getElementById('loader');
 const loaderText = document.querySelector('#loader p');
@@ -17,8 +17,7 @@ async function handleSearch(event) {
         return;
     }
     
-    // --- STABILITY IMPROVEMENT ---
-    searchButton.disabled = true; // Disable button to prevent multiple searches
+    searchButton.disabled = true;
     loaderText.textContent = 'Searching multiple providers... this may take up to 35 seconds.';
     loader.classList.remove('hidden');
     resultsContainer.innerHTML = '';
@@ -33,17 +32,16 @@ async function handleSearch(event) {
         
         if (results.length === 0) {
             resultsContainer.innerHTML = `<p>Sorry, no matching offers were found for "${searchTerm}". Please try a different search term.</p>`;
-            return;
+        } else {
+            displayResults(results, searchTerm);
         }
         
-        displayResults(results, searchTerm);
     } catch (error) {
         console.error("Failed to fetch data:", error);
         resultsContainer.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
     } finally {
-        // --- STABILITY IMPROVEMENT ---
         loader.classList.add('hidden');
-        searchButton.disabled = false; // Re-enable the button
+        searchButton.disabled = false;
     }
 }
 
@@ -59,14 +57,15 @@ function displayResults(results, searchTerm) {
             ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"`
             : `href="#" class="disabled-link"`; 
 
-        // The onerror handler is crucial for fixing broken image links from the API.
+        // --- NEW: Better onerror handler ---
+        // If the image fails, we hide it, revealing the styled background.
         card.innerHTML = `
             <div class="result-image">
-                <img src="${offer.image}" alt="${offer.store}" onerror="this.onerror=null;this.src='https://via.placeholder.com/150';">
+                <img src="${offer.image}" alt="${offer.title}" onerror="this.style.display='none';">
             </div>
             <div class="result-info">
                 <h3>${offer.title}</h3>
-                <p>Sold by: <strong>${offer.store}</strong> <span style="font-size: 12px; color: #999;">(via ${offer.source})</span></p>
+                <p>Sold by: <strong>${offer.store}</strong></p>
             </div>
             <div class="result-price">
                 <a ${linkAttributes}>
