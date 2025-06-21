@@ -1,4 +1,4 @@
-// public/script.js (With Front-End Filtering & Sorting)
+// public/script.js (FINAL - All Features Implemented)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
@@ -7,16 +7,19 @@ const resultsContainer = document.getElementById('results-container');
 const loader = document.getElementById('loader');
 const loaderText = document.querySelector('#loader p');
 
-// --- NEW: References for the new controls and a place to store results ---
 const controlsContainer = document.getElementById('controls-container');
 const sortSelect = document.getElementById('sort-select');
 const storeFilterSelect = document.getElementById('store-filter-select');
-let fullResults = []; // This will hold the original, complete list from the server.
+const conditionFilterSelect = document.getElementById('condition-filter-select');
+
+let fullResults = [];
+let loadingInterval;
+const loadingMessages = [ "Contacting providers...", "Aggregating results...", "Filtering for the best deals...", "Sorting the prices...", "Almost there..." ];
 
 searchForm.addEventListener('submit', handleSearch);
-// --- NEW: Event listeners to trigger re-rendering ---
 sortSelect.addEventListener('change', applyFiltersAndSort);
 storeFilterSelect.addEventListener('change', applyFiltersAndSort);
+conditionFilterSelect.addEventListener('change', applyFiltersAndSort);
 
 async function handleSearch(event) {
     event.preventDefault();
@@ -27,10 +30,16 @@ async function handleSearch(event) {
     }
     
     searchButton.disabled = true;
-    controlsContainer.style.display = 'none'; // Hide controls during new search
-    loaderText.textContent = 'Searching multiple providers... this may take up to 35 seconds.';
-    loader.classList.remove('hidden');
+    controlsContainer.style.display = 'none';
     resultsContainer.innerHTML = '';
+    
+    let messageIndex = 0;
+    loaderText.textContent = loadingMessages[messageIndex];
+    loader.classList.remove('hidden');
+    loadingInterval = setInterval(() => {
+        messageIndex = (messageIndex + 1) % loadingMessages.length;
+        loaderText.textContent = loadingMessages[messageIndex];
+    }, 4000);
 
     try {
         const response = await fetch(`/search?query=${encodeURIComponent(searchTerm)}`);
@@ -39,14 +48,19 @@ async function handleSearch(event) {
             throw new Error(errorData.error || `Server returned an error: ${response.statusText}`);
         }
         
-        fullResults = await response.json(); // Store the full list of results
+        fullResults = await response.json();
         
         if (fullResults.length === 0) {
             resultsContainer.innerHTML = `<p>Sorry, no matching offers were found for "${searchTerm}". Please try a different search term.</p>`;
         } else {
-            populateStoreFilter();      // NEW: Fill the store dropdown
-            applyFiltersAndSort();      // NEW: Render the initial view
-            controlsContainer.style.display = 'flex'; // Show the controls
+            // Reset filters to default before showing results
+            sortSelect.value = 'price-asc';
+            storeFilterSelect.innerHTML = '<option value="all">All Stores</option>';
+            conditionFilterSelect.value = 'all';
+
+            populateStoreFilter();
+            applyFiltersAndSort();
+            controlsContainer.style.display = 'flex';
         }
         
     } catch (error) {
@@ -55,35 +69,37 @@ async function handleSearch(event) {
     } finally {
         loader.classList.add('hidden');
         searchButton.disabled = false;
+        clearInterval(loadingInterval);
     }
 }
 
-// --- NEW: Master function to handle filtering and sorting ---
 function applyFiltersAndSort() {
     const sortBy = sortSelect.value;
     const storeFilter = storeFilterSelect.value;
+    const conditionFilter = conditionFilterSelect.value;
 
-    let processedResults = [...fullResults]; // Always work with a fresh copy
+    let processedResults = [...fullResults];
 
-    // 1. Apply the Store Filter
+    if (conditionFilter === 'new') {
+        processedResults = processedResults.filter(item => item.condition === 'New');
+    } else if (conditionFilter === 'refurbished') {
+        processedResults = processedResults.filter(item => item.condition === 'Refurbished');
+    }
+
     if (storeFilter !== 'all') {
         processedResults = processedResults.filter(item => item.store === storeFilter);
     }
 
-    // 2. Apply the Sorting
     if (sortBy === 'price-asc') {
         processedResults.sort((a, b) => a.price - b.price);
     } else if (sortBy === 'price-desc') {
         processedResults.sort((a, b) => b.price - a.price);
     }
 
-    renderResults(processedResults, `Best Prices for ${searchInput.value.trim()}`);
+    renderResults(processedResults);
 }
 
-// --- NEW: Function to dynamically create the store filter options ---
 function populateStoreFilter() {
-    storeFilterSelect.innerHTML = '<option value="all">All Stores</option>';
-    // Get a unique, sorted list of stores from the results
     const stores = [...new Set(fullResults.map(item => item.store))].sort();
     stores.forEach(store => {
         const option = document.createElement('option');
@@ -93,20 +109,21 @@ function populateStoreFilter() {
     });
 }
 
-// --- MODIFIED: This function now just handles the rendering part ---
-function renderResults(results, title) {
-    resultsContainer.innerHTML = `<h2>${title}</h2>`;
-
+function renderResults(results) {
+    resultsContainer.innerHTML = `<h2>Best Prices for ${searchInput.value.trim()}</h2>`;
     if (results.length === 0) {
-        resultsContainer.innerHTML += `<p>No results match the current filter.</p>`;
+        resultsContainer.innerHTML += `<p>No results match the current filters.</p>`;
         return;
     }
-
     results.forEach(offer => {
         const card = document.createElement('div');
         card.className = 'result-card';
         const isLinkValid = offer.url && offer.url !== '#';
         const linkAttributes = isLinkValid ? `href="${offer.url}" target="_blank" rel="noopener noreferrer"` : `href="#" class="disabled-link"`; 
+        
+        const conditionBadge = offer.condition === 'Refurbished' 
+            ? `<span class="condition-badge">Refurbished</span>` 
+            : '';
 
         card.innerHTML = `
             <div class="result-image">
@@ -114,7 +131,7 @@ function renderResults(results, title) {
             </div>
             <div class="result-info">
                 <h3>${offer.title}</h3>
-                <p>Sold by: <strong>${offer.store}</strong></p>
+                <p>Sold by: <strong>${offer.store}</strong> ${conditionBadge}</p>
             </div>
             <div class="result-price">
                 <a ${linkAttributes}>
@@ -124,4 +141,45 @@ function renderResults(results, title) {
         `;
         resultsContainer.appendChild(card);
     });
+}
+
+// --- Admin Panel Logic ---
+const adminButton = document.getElementById('admin-button');
+const adminPanel = document.getElementById('admin-panel');
+const closeAdminPanel = document.getElementById('close-admin-panel');
+const totalSearchesEl = document.getElementById('total-searches');
+const uniqueVisitorsEl = document.getElementById('unique-visitors');
+const searchHistoryListEl = document.getElementById('search-history-list');
+
+adminButton.addEventListener('click', () => { const code = prompt("Please enter the admin code:"); if (code) { fetchAdminData(code); } });
+closeAdminPanel.addEventListener('click', () => { adminPanel.style.display = 'none'; });
+adminPanel.addEventListener('click', (event) => { if (event.target === adminPanel) { adminPanel.style.display = 'none'; } });
+
+async function fetchAdminData(code) {
+    try {
+        const response = await fetch('/admin/traffic-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code }),
+        });
+        if (!response.ok) { alert('Incorrect code.'); return; }
+        const data = await response.json();
+        totalSearchesEl.textContent = data.totalSearches;
+        uniqueVisitorsEl.textContent = data.uniqueVisitors;
+        searchHistoryListEl.innerHTML = '';
+        if(data.searchHistory.length > 0) {
+            data.searchHistory.forEach(item => {
+                const li = document.createElement('li');
+                const timestamp = new Date(item.timestamp).toLocaleString();
+                li.textContent = `"${item.query}" at ${timestamp}`;
+                searchHistoryListEl.appendChild(li);
+            });
+        } else {
+            searchHistoryListEl.innerHTML = '<li>No searches recorded yet.</li>';
+        }
+        adminPanel.style.display = 'flex';
+    } catch (error) {
+        console.error("Error fetching admin data:", error);
+        alert("An error occurred while fetching stats.");
+    }
 }
