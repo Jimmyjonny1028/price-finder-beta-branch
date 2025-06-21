@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING FOR ALL 3 SOURCES)
+// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING & SEQUENTIAL REQUESTS)
 
 const express = require('express');
 const axios = require('axios');
@@ -77,6 +77,7 @@ function cleanGoogleUrl(googleUrl) {
 }
 
 async function searchPricerAPI(query) {
+    // This function remains unchanged
     try {
         const regionalQuery = `${query} australia`;
         console.log(`Calling Pricer API with regional hint: "${regionalQuery}"`);
@@ -89,7 +90,7 @@ async function searchPricerAPI(query) {
         return response.data.map(item => ({
             source: 'Pricer API',
             title: item?.title || 'Title Not Found',
-            price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
+            price: item?.price ? parseFloat(String(item.price).replace(/[^0-g.]/g, '')) : null,
             price_string: item?.price || 'N/A',
             url: cleanGoogleUrl(item?.link),
             image: item?.img || 'https://via.placeholder.com/100',
@@ -102,7 +103,7 @@ async function searchPricerAPI(query) {
 }
 
 
-// --- FULLY UPDATED FUNCTION TO HANDLE AMAZON, EBAY, AND GOOGLE ---
+// --- UPDATED FUNCTION WITH SEQUENTIAL JOB SUBMISSION ---
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
@@ -112,20 +113,29 @@ async function searchPriceApiCom(query) {
             { source: 'google_shopping', topic: 'search_results', key: 'term', values: query }
         ];
 
-        console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com...`);
-        const jobPromises = jobsToSubmit.map(job =>
-            axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', max_pages: 1, ...job })
-            .then(res => ({ ...res.data, source: job.source, topic: job.topic }))
-            .catch(err => {
-                console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
-                return null;
-            })
-        );
+        console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com sequentially...`);
         
-        const jobResponses = (await Promise.all(jobPromises)).filter(Boolean);
-        if (jobResponses.length === 0) return [];
+        // --- START: The Fix ---
+        const jobResponses = [];
+        for (const job of jobsToSubmit) {
+            try {
+                console.log(`Submitting job for source: ${job.source}...`);
+                const res = await axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', max_pages: 1, ...job });
+                // Add the source and topic back to the response for later use
+                jobResponses.push({ ...res.data, source: job.source, topic: job.topic });
+                 await wait(1000); // Add a small 1-second delay between requests to be safe
+            } catch (err) {
+                 console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
+            }
+        }
+        // --- END: The Fix ---
         
-        console.log(`Jobs submitted. IDs: ${jobResponses.map(j => j.job_id).join(', ')}. Waiting...`);
+        if (jobResponses.length === 0) {
+            console.log("No jobs were successfully submitted to PriceAPI.com.");
+            return [];
+        }
+        
+        console.log(`Jobs submitted. IDs: ${jobResponses.map(j => j.job_id).join(', ')}. Waiting for processing...`);
         await wait(30000); // Wait for APIs to process
 
         console.log("Fetching results for completed jobs...");
@@ -142,10 +152,9 @@ async function searchPriceApiCom(query) {
 
         for (const data of downloadedResults) {
             let mapped = [];
-            const sourceName = data.source; // 'amazon', 'ebay', or 'google_shopping'
+            const sourceName = data.source;
             const topic = data.topic;
 
-            // --- Handler for Amazon's 'product_and_offers' structure ---
             if (sourceName === 'amazon' && topic === 'product_and_offers') {
                 const content = data.results?.[0]?.content;
                 if (content && content.buybox && content.buybox.min_price) {
@@ -160,7 +169,6 @@ async function searchPriceApiCom(query) {
                     });
                 }
             } 
-            // --- Unified handler for eBay and Google Shopping 'search_results' structure ---
             else if (topic === 'search_results') {
                 const searchResults = data.results?.[0]?.content?.search_results || [];
                 
@@ -169,7 +177,6 @@ async function searchPriceApiCom(query) {
                     let price_string = 'N/A';
                     const store = item.shop_name || sourceName;
 
-                    // Handles specific "offers" with a direct price (common to both Google and eBay)
                     if (item.type === 'offer' && item.price) {
                         price = parseFloat(item.price_with_shipping) || parseFloat(item.price);
                         price_string = `$${parseFloat(item.price).toFixed(2)}`;
@@ -178,7 +185,6 @@ async function searchPriceApiCom(query) {
                             price_string += ` + $${shipping.toFixed(2)} ship`;
                         }
                     }
-                    // Handles "product" aggregates (Google) or "offer_cluster" (eBay)
                     else if ((item.type === 'product' || item.type === 'offer_cluster') && item.min_price) {
                         price = parseFloat(item.min_price);
                         price_string = `From $${price.toFixed(2)}`;
@@ -191,12 +197,12 @@ async function searchPriceApiCom(query) {
                             price: price,
                             price_string: price_string,
                             url: item.url || '#',
-                            image: item.img_url || 'https://via.placeholder.com/100', // Fallback for eBay
+                            image: item.img_url || 'https://via.placeholder.com/100',
                             store: store
                         };
                     }
                     return null;
-                }).filter(Boolean); // Remove any null (invalid) items
+                }).filter(Boolean);
             }
             
             const validMapped = mapped.filter(item => item.title && item.price);
