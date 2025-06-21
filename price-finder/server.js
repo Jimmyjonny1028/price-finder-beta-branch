@@ -1,4 +1,4 @@
-// server.js (FINAL, NO DUPLICATES - Scaled to 30 Pages with All Features)
+// server.js (FINAL - No Duplicates, All Features)
 
 const express = require('express');
 const cors = require('cors');
@@ -23,15 +23,12 @@ const ADMIN_CODE = process.env.ADMIN_CODE;
 // =================================================================
 // ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
 // =================================================================
-
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
 
 const detectItemCondition = (title) => {
     const lowerCaseTitle = title.toLowerCase();
-    if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) {
-        return 'Refurbished';
-    }
+    if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; }
     return 'New';
 };
 
@@ -52,7 +49,6 @@ const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); 
 // =================================================================
 // THE 30-PAGE PARALLEL SCRAPER
 // =================================================================
-
 async function scrapeSingleGooglePage(url, browser) {
     let page;
     try {
@@ -67,15 +63,13 @@ async function scrapeSingleGooglePage(url, browser) {
             if (resultText.includes('$')) {
                 const title = $(el).find('h3').text();
                 const link = $(el).find('a').attr('href');
-                const priceMatch = resultText.match(/\$\d{1,3}(,\d{3})*(\.\d{2})?/);
+                const priceMatch = resultText.match(/\$\s?\d{1,3}(,\d{3})*(\.\d{2})?/);
                 const priceString = priceMatch ? priceMatch[0] : null;
                 if (title && link && priceString) {
                     try {
                         const store = new URL(link).hostname.replace('www.', '');
                         results.push({ title, price_string: priceString, store, url: link });
-                    } catch (e) {
-                        // Ignore invalid links
-                    }
+                    } catch (e) { /* Ignore invalid links */ }
                 }
             }
         });
@@ -114,37 +108,19 @@ async function scrapeGoogleBroadSearch(query) {
 // =================================================================
 // MAIN ROUTES
 // =================================================================
-
 app.get('/search', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Search query is required' });
-    
-    try {
-        const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        trafficLog.totalSearches++;
-        trafficLog.uniqueVisitors.add(visitorIp);
-        trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() });
-        if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); }
-    } catch (e) { console.error("Error logging traffic:", e); }
-
+    try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) { console.error("Error logging traffic:", e); }
     const cacheKey = query.toLowerCase();
-    if (searchCache.has(cacheKey)) {
-        const cachedData = searchCache.get(cacheKey);
-        if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) {
-            console.log(`Serving results for "${query}" from CACHE!`);
-            return res.json(cachedData.results);
-        }
-    }
-
+    if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { console.log(`Serving results for "${query}" from CACHE!`); return res.json(cachedData.results); } }
     console.log(`Starting 30-page broad scrape for: ${query}`);
     const isAccessorySearch = detectSearchIntent(query);
     console.log(`Search Intent Detected: ${isAccessorySearch ? 'ACCESSORY' : 'MAIN PRODUCT'}`);
-
     try {
         let rawResults = await scrapeGoogleBroadSearch(query);
         let allResults = rawResults.map(item => ({ ...item, price: parseFloat(item.price_string.replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(null) })).filter(item => !isNaN(item.price));
         console.log(`Scraped ${allResults.length} initial valid results.`);
-        
         let finalFilteredResults;
         if (isAccessorySearch) {
             finalFilteredResults = filterResultsByQuery(allResults, query);
@@ -154,10 +130,8 @@ app.get('/search', async (req, res) => {
             const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query);
             finalFilteredResults = filterByPriceAnomalies(queryFiltered);
         }
-        
         console.log(`Kept ${finalFilteredResults.length} final results after all filtering.`);
         const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price);
-        
         searchCache.set(cacheKey, { results: sortedResults, timestamp: Date.now() });
         res.json(sortedResults);
     } catch (error) {
@@ -168,14 +142,8 @@ app.get('/search', async (req, res) => {
 
 app.post('/admin/traffic-data', (req, res) => {
     const { code } = req.body;
-    if (!code || code !== ADMIN_CODE) {
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-    res.json({
-        totalSearches: trafficLog.totalSearches,
-        uniqueVisitors: trafficLog.uniqueVisitors.size,
-        searchHistory: trafficLog.searchHistory
-    });
+    if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); }
+    res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory });
 });
 
 app.listen(PORT, () => console.log(`Server is running! Open your browser to http://localhost:${PORT}`));
