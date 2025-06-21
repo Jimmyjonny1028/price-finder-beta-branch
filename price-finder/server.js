@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING)
+// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING FOR ALL 3 SOURCES)
 
 const express = require('express');
 const axios = require('axios');
@@ -25,7 +25,8 @@ const filterResultsByQuery = (results, query) => {
 const filterForIrrelevantAccessories = (results) => {
     const negativeKeywords = [
         'strap', 'band', 'protector', 'case', 'charger', 'cable', 
-        'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide'
+        'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide',
+        'replacement', 'for '
     ];
     return results.filter(item => {
         const itemTitle = item.title.toLowerCase();
@@ -100,6 +101,8 @@ async function searchPricerAPI(query) {
     }
 }
 
+
+// --- FULLY UPDATED FUNCTION TO HANDLE AMAZON, EBAY, AND GOOGLE ---
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
@@ -123,7 +126,7 @@ async function searchPriceApiCom(query) {
         if (jobResponses.length === 0) return [];
         
         console.log(`Jobs submitted. IDs: ${jobResponses.map(j => j.job_id).join(', ')}. Waiting...`);
-        await wait(30000);
+        await wait(30000); // Wait for APIs to process
 
         console.log("Fetching results for completed jobs...");
         const resultPromises = jobResponses.map(job =>
@@ -139,32 +142,63 @@ async function searchPriceApiCom(query) {
 
         for (const data of downloadedResults) {
             let mapped = [];
-            if (data.topic === 'product_and_offers') {
-                // Safely access the nested products array
-                const products = data.results?.[0]?.products || [];
-                mapped = products.map(item => ({
-                    source: `PriceAPI (${data.source})`,
-                    title: item?.name || 'Title Not Found',
-                    price: item?.price,
-                    price_string: item?.offer?.price_string || (item?.price ? `$${item.price.toFixed(2)}` : 'N/A'),
-                    url: item?.url || '#',
-                    image: item?.image || 'https://via.placeholder.com/100',
-                    store: item?.shop?.name || data.source
-                }));
-            } else if (data.topic === 'search_results') {
-                // Safely access the results array for this topic
-                const products = data.results || [];
-                mapped = products.map(item => ({
-                    source: `PriceAPI (${data.source})`,
-                    title: item?.search_result?.name || 'Title Not Found',
-                    price: parseFloat(item?.search_result?.min_price) || null,
-                    price_string: item?.search_result?.min_price ? `$${item.search_result.min_price}` : 'N/A',
-                    url: item?.search_result?.url || '#',
-                    image: item?.search_result?.image_url || 'https://via.placeholder.com/100',
-                    store: data.source
-                }));
+            const sourceName = data.source; // 'amazon', 'ebay', or 'google_shopping'
+            const topic = data.topic;
+
+            // --- Handler for Amazon's 'product_and_offers' structure ---
+            if (sourceName === 'amazon' && topic === 'product_and_offers') {
+                const content = data.results?.[0]?.content;
+                if (content && content.buybox && content.buybox.min_price) {
+                    mapped.push({
+                        source: `PriceAPI (Amazon)`,
+                        title: content.name || 'Title Not Found',
+                        price: parseFloat(content.buybox.min_price),
+                        price_string: `$${parseFloat(content.buybox.min_price).toFixed(2)}`,
+                        url: content.url || '#',
+                        image: content.image_url || 'https://via.placeholder.com/100',
+                        store: content.buybox.shop_name || 'Amazon'
+                    });
+                }
+            } 
+            // --- Unified handler for eBay and Google Shopping 'search_results' structure ---
+            else if (topic === 'search_results') {
+                const searchResults = data.results?.[0]?.content?.search_results || [];
+                
+                mapped = searchResults.map(item => {
+                    let price = null;
+                    let price_string = 'N/A';
+                    const store = item.shop_name || sourceName;
+
+                    // Handles specific "offers" with a direct price (common to both Google and eBay)
+                    if (item.type === 'offer' && item.price) {
+                        price = parseFloat(item.price_with_shipping) || parseFloat(item.price);
+                        price_string = `$${parseFloat(item.price).toFixed(2)}`;
+                        const shipping = parseFloat(item.shipping_costs);
+                        if (shipping > 0) {
+                            price_string += ` + $${shipping.toFixed(2)} ship`;
+                        }
+                    }
+                    // Handles "product" aggregates (Google) or "offer_cluster" (eBay)
+                    else if ((item.type === 'product' || item.type === 'offer_cluster') && item.min_price) {
+                        price = parseFloat(item.min_price);
+                        price_string = `From $${price.toFixed(2)}`;
+                    }
+
+                    if (item.name && price !== null) {
+                        return {
+                            source: `PriceAPI (${sourceName})`,
+                            title: item.name,
+                            price: price,
+                            price_string: price_string,
+                            url: item.url || '#',
+                            image: item.img_url || 'https://via.placeholder.com/100', // Fallback for eBay
+                            store: store
+                        };
+                    }
+                    return null;
+                }).filter(Boolean); // Remove any null (invalid) items
             }
-            // Filter out any results that are completely empty after mapping
+            
             const validMapped = mapped.filter(item => item.title && item.price);
             allResults = allResults.concat(validMapped);
         }
@@ -176,6 +210,7 @@ async function searchPriceApiCom(query) {
         return [];
     }
 }
+
 
 app.listen(PORT, () => {
     console.log(`Server is running! Open your browser to http://localhost:${PORT}`);
