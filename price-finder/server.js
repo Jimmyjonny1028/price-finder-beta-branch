@@ -1,4 +1,4 @@
-// server.js (FIXED - Corrected API Parameter)
+// server.js (FIXED - Post-Processing Language Filter)
 
 const express = require('express');
 const axios = require('axios');
@@ -22,44 +22,22 @@ const ACCESSORY_KEYWORDS = [
     'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement'
 ];
 
-const filterForIrrelevantAccessories = (results) => {
+// --- NEW: Language Filter (Post-Processing) ---
+// This function checks if a title contains characters outside the common English character set.
+const filterForEnglish = (results) => {
+    // This regex detects characters that are NOT common in English text (e.g., Cyrillic, Chinese, Japanese).
+    const isNotEnglishRegex = /[^\u0020-\u007E]/; 
     return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return !ACCESSORY_KEYWORDS.some(keyword => itemTitle.includes(keyword));
+        // If the regex test is false (no non-English characters found), we keep the item.
+        return !isNotEnglishRegex.test(item.title);
     });
 };
 
-const filterForMainDevice = (results) => {
-    const negativePhrases = ['for ', 'compatible with', 'fits '];
-    return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return !negativePhrases.some(phrase => itemTitle.includes(phrase));
-    });
-};
-
-const filterByPriceAnomalies = (results) => {
-    if (results.length < 5) return results;
-    const prices = results.map(r => r.price).sort((a, b) => a - b);
-    const mid = Math.floor(prices.length / 2);
-    const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
-    const priceThreshold = medianPrice * 0.20; 
-    console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`);
-    return results.filter(item => item.price >= priceThreshold);
-};
-
-const filterResultsByQuery = (results, query) => {
-    const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0);
-    if (queryKeywords.length === 0) return results;
-    return results.filter(item => {
-        const itemTitle = item.title.toLowerCase();
-        return queryKeywords.every(keyword => itemTitle.includes(keyword));
-    });
-};
-
-const detectSearchIntent = (query) => {
-    const queryLower = query.toLowerCase();
-    return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword));
-};
+const filterForIrrelevantAccessories = (results) => { /* ... same as before ... */ };
+const filterForMainDevice = (results) => { /* ... same as before ... */ };
+const filterByPriceAnomalies = (results) => { /* ... same as before ... */ };
+const filterResultsByQuery = (results, query) => { /* ... same as before ... */ };
+const detectSearchIntent = (query) => { /* ... same as before ... */ };
 
 app.get('/search', async (req, res) => {
     const { query } = req.query;
@@ -78,13 +56,17 @@ app.get('/search', async (req, res) => {
         const allResults = [...pricerResults, ...priceApiComResults].filter(item => item.price !== null && !isNaN(item.price));
         console.log(`Received ${allResults.length} initial valid results.`);
 
+        // --- APPLYING THE NEW LANGUAGE FILTER FIRST ---
+        const languageFiltered = filterForEnglish(allResults);
+        console.log(`Kept ${languageFiltered.length} results after English language filtering.`);
+
         let finalFilteredResults;
         if (isAccessorySearch) {
             console.log("Applying ACCESSORY filtering logic...");
-            finalFilteredResults = filterResultsByQuery(allResults, query);
+            finalFilteredResults = filterResultsByQuery(languageFiltered, query);
         } else {
             console.log("Applying MAIN PRODUCT filtering logic...");
-            const accessoryFiltered = filterForIrrelevantAccessories(allResults);
+            const accessoryFiltered = filterForIrrelevantAccessories(languageFiltered);
             const mainDeviceFiltered = filterForMainDevice(accessoryFiltered);
             const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query);
             finalFilteredResults = filterByPriceAnomalies(queryFiltered);
@@ -100,33 +82,16 @@ app.get('/search', async (req, res) => {
     }
 });
 
-function cleanGoogleUrl(googleUrl) {
-    if (!googleUrl || !googleUrl.includes('?q=')) return googleUrl;
-    try { const url = new URL(googleUrl); return url.searchParams.get('q') || googleUrl; }
-    catch (e) { return googleUrl; }
-}
-
-async function searchPricerAPI(query) {
-    try {
-        const regionalQuery = `${query} australia`;
-        const response = await axios.request({
-            method: 'GET', url: 'https://pricer.p.rapidapi.com/str',
-            params: { q: regionalQuery },
-            headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
-        });
-        return response.data.map(item => ({ source: 'Pricer API', title: item?.title || 'Title Not Found', price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null, price_string: item?.price || 'N/A', url: cleanGoogleUrl(item?.link), image: item?.img || 'https://via.placeholder.com/150', store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified' }));
-    } catch (err) { console.error("Pricer API search failed:", err.message); return []; }
-}
-
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
-        // --- THE FIX IS HERE ---
-        // Changed "values" to "value" to match the PriceAPI.com documentation.
+        // --- THE FIX FOR THE 400 ERROR ---
+        // We now send the simplest possible request with the 'values' parameter
+        // and NO optional parameters like 'hl', which were causing the error.
         const jobsToSubmit = [
-            { source: 'amazon', topic: 'product_and_offers', key: 'term', value: query, hl: 'en' },
-            { source: 'ebay', topic: 'search_results', key: 'term', value: query, hl: 'en' },
-            { source: 'google_shopping', topic: 'search_results', key: 'term', value: query, hl: 'en' }
+            { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
+            { source: 'ebay', topic: 'search_results', key: 'term', values: query },
+            { source: 'google_shopping', topic: 'search_results', key: 'term', values: query }
         ];
 
         const jobPromises = jobsToSubmit.map(job =>
@@ -173,6 +138,15 @@ async function searchPriceApiCom(query) {
         return [];
     }
 }
+
+// --- Helper functions (no changes needed) ---
+const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
+const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
+const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
+const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
+const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
+function cleanGoogleUrl(googleUrl) { if (!googleUrl || !googleUrl.includes('?q=')) return googleUrl; try { const url = new URL(googleUrl); return url.searchParams.get('q') || googleUrl; } catch (e) { return googleUrl; } }
+async function searchPricerAPI(query) { try { const regionalQuery = `${query} australia`; const response = await axios.request({ method: 'GET', url: 'https://pricer.p.rapidapi.com/str', params: { q: regionalQuery }, headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' } }); return response.data.map(item => ({ source: 'Pricer API', title: item?.title || 'Title Not Found', price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null, price_string: item?.price || 'N/A', url: cleanGoogleUrl(item?.link), image: item?.img || 'https://via.placeholder.com/150', store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified' })); } catch (err) { console.error("Pricer API search failed:", err.message); return []; } }
 
 app.listen(PORT, () => {
     console.log(`Server is running! Open your browser to http://localhost:${PORT}`);
