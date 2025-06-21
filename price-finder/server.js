@@ -1,8 +1,7 @@
-// server.js (Apify Version - NO DELAY)
+// server.js (Apify Version - No Delays & Clean Labels)
 
 const express = require('express');
-const axios = require('axios');
-const cors =require('cors');
+const cors = require('cors');
 require('dotenv').config();
 const { ApifyClient } = require('apify-client');
 
@@ -29,10 +28,10 @@ app.get('/search', async (req, res) => {
 
     console.log(`Starting hybrid search for: ${query}`);
     try {
-        // We will combine results from the free eBay API and our free Apify Actors
+        // We will combine results from the eBay API and our Apify Actors
         const [ebayResults, apifyResults] = await Promise.all([
-            searchEbayAPI(query),    // Your high-volume eBay function
-            searchApify(query)       // Your broad-search Apify function
+            searchEbayAPI(query),
+            searchApify(query)
         ]);
 
         const allResults = [...ebayResults, ...apifyResults];
@@ -52,7 +51,7 @@ app.get('/search', async (req, res) => {
 });
 
 
-// --- Apify function using ONLY Free-Tier-Compatible Actors (No Delays) ---
+// --- Apify function using ONLY Free-Tier-Compatible Actors ---
 async function searchApify(query) {
     console.log("Starting Apify searches (Google & Amazon)...");
 
@@ -84,9 +83,9 @@ async function searchApify(query) {
         const googleItems = googleDataset.items;
         const amazonItems = amazonDataset.items;
 
-        // Map results to our standard format
+        // --- Map results to our standard format with CLEAN labels ---
         const googleResults = googleItems.flatMap(r => r.results || []).map(item => ({
-            source: 'Apify (Google)',
+            source: 'Google', // MODIFIED
             title: item.title,
             price: item.price,
             price_string: item.priceString,
@@ -96,7 +95,7 @@ async function searchApify(query) {
         }));
 
         const amazonResults = amazonItems.map(item => ({
-            source: 'Apify (Amazon)',
+            source: 'Amazon', // MODIFIED
             title: item.title,
             price: item.price,
             price_string: item.price_string || (item.price ? `$${item.price}` : 'N/A'),
@@ -119,8 +118,13 @@ async function searchApify(query) {
 // --- TODO: Your function for the official eBay API ---
 async function searchEbayAPI(query) {
     console.log("Searching eBay via official API...");
-    // This is where you will implement the OAuth flow and call the eBay Browse API.
-    // This will provide your 5,000 free daily searches.
+    // This is where you would implement the OAuth flow and call the eBay Browse API.
+    // When you map the results, be sure to set the source label correctly.
+    // Example:
+    // return mappedEbayResults.map(item => ({
+    //     ...item,
+    //     source: 'eBay' // MODIFIED
+    // }));
     return [];
 }
 
