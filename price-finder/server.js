@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - FULLY TARGETING AUSTRALIA)
+// server.js (FINAL WORKING VERSION - STRICTLY AUSTRALIAN)
 
 const express = require('express');
 const axios = require('axios');
@@ -14,10 +14,8 @@ app.use(express.static('public'));
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
 
-// A helper function to make the server wait
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// A helper function to smartly filter results based on search keywords
 const filterResultsByQuery = (results, query) => {
     const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 1 && isNaN(word));
     if (queryKeywords.length === 0) return results;
@@ -32,7 +30,7 @@ app.get('/search', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Search query is required' });
 
-    console.log(`Starting multi-source Australian search for: ${query}`);
+    console.log(`Starting multi-source smart search for: ${query}`);
     try {
         const [pricerResults, priceApiComResults] = await Promise.all([
             searchPricerAPI(query),
@@ -40,9 +38,18 @@ app.get('/search', async (req, res) => {
         ]);
 
         const allResults = [...pricerResults, ...priceApiComResults];
-        
-        console.log(`Received ${allResults.length} initial results. Filtering for accuracy...`);
-        const filteredResults = filterResultsByQuery(allResults, query);
+        console.log(`Received ${allResults.length} initial results.`);
+
+        // --- FINAL AUSTRALIAN SAFETY FILTER ---
+        // We only keep results where the URL is a .com.au domain OR
+        // the result came from PriceAPI.com (which we know we configured for 'au').
+        const australianResults = allResults.filter(item => 
+            (item.url && item.url.includes('.com.au')) || item.source.startsWith('PriceAPI')
+        );
+        console.log(`Kept ${australianResults.length} results after strict Australian filtering.`);
+
+        const filteredResults = filterResultsByQuery(australianResults, query);
+        console.log(`Kept ${filteredResults.length} results after keyword filtering.`);
 
         const validResults = filteredResults.filter(item => item.price !== null && !isNaN(item.price));
         console.log(`Found ${validResults.length} valid, sorted offers.`);
@@ -66,22 +73,22 @@ function cleanGoogleUrl(googleUrl) {
     }
 }
 
-// --- Pricer API Helper - MODIFIED FOR AUSTRALIA ---
+// --- Pricer API Helper - FORCED AUSTRALIA SEARCH ---
 async function searchPricerAPI(query) {
     try {
-        // We add "australia" to the query to hint the location
-        const regionalQuery = `${query} australia`;
-        console.log(`Calling Pricer API with regional query: "${regionalQuery}"`);
+        // This forces the search to only look at .com.au sites
+        const regionalQuery = `${query} site:.com.au`;
+        console.log(`Calling Pricer API with FORCED regional query: "${regionalQuery}"`);
         
         const response = await axios.request({
             method: 'GET',
             url: 'https://pricer.p.rapidapi.com/str',
-            params: { q: regionalQuery }, // Use the modified query
+            params: { q: regionalQuery },
             headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
         });
 
         return response.data.map(item => ({
-            source: 'Pricer API (AU Hint)',
+            source: 'Pricer API',
             title: item.title || 'Title Not Found',
             price: item.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
             price_string: item.price || 'N/A',
