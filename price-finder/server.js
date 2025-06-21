@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING & SEQUENTIAL REQUESTS)
+// server.js (FINAL WORKING VERSION - CORRECT JSON PARSING & 5-SECOND DELAYS)
 
 const express = require('express');
 const axios = require('axios');
@@ -90,7 +90,7 @@ async function searchPricerAPI(query) {
         return response.data.map(item => ({
             source: 'Pricer API',
             title: item?.title || 'Title Not Found',
-            price: item?.price ? parseFloat(String(item.price).replace(/[^0-g.]/g, '')) : null,
+            price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
             price_string: item?.price || 'N/A',
             url: cleanGoogleUrl(item?.link),
             image: item?.img || 'https://via.placeholder.com/100',
@@ -102,8 +102,7 @@ async function searchPricerAPI(query) {
     }
 }
 
-
-// --- UPDATED FUNCTION WITH SEQUENTIAL JOB SUBMISSION ---
+// --- UPDATED FUNCTION WITH 5-SECOND DELAYS FOR SUBMISSION AND DOWNLOADING ---
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
@@ -115,20 +114,18 @@ async function searchPriceApiCom(query) {
 
         console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com sequentially...`);
         
-        // --- START: The Fix ---
         const jobResponses = [];
         for (const job of jobsToSubmit) {
             try {
                 console.log(`Submitting job for source: ${job.source}...`);
                 const res = await axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', max_pages: 1, ...job });
-                // Add the source and topic back to the response for later use
                 jobResponses.push({ ...res.data, source: job.source, topic: job.topic });
-                 await wait(1000); // Add a small 1-second delay between requests to be safe
+                console.log(`Job for ${job.source} submitted. Waiting 5 seconds...`);
+                await wait(5000); // Wait 5 seconds before the next submission
             } catch (err) {
                  console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
             }
         }
-        // --- END: The Fix ---
         
         if (jobResponses.length === 0) {
             console.log("No jobs were successfully submitted to PriceAPI.com.");
@@ -136,19 +133,23 @@ async function searchPriceApiCom(query) {
         }
         
         console.log(`Jobs submitted. IDs: ${jobResponses.map(j => j.job_id).join(', ')}. Waiting for processing...`);
-        await wait(30000); // Wait for APIs to process
+        await wait(30000);
 
-        console.log("Fetching results for completed jobs...");
-        const resultPromises = jobResponses.map(job =>
-            axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } })
-            .then(res => ({ ...res.data, source: job.source, topic: job.topic }))
-            .catch(err => {
+        // --- START: The Second Fix (Sequential Downloading) ---
+        console.log("Fetching results for completed jobs sequentially...");
+        const downloadedResults = [];
+        for (const job of jobResponses) {
+            try {
+                console.log(`Fetching results for job ID ${job.job_id} (${job.source})...`);
+                const res = await axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } });
+                downloadedResults.push({ ...res.data, source: job.source, topic: job.topic });
+                console.log(`Results for ${job.source} downloaded. Waiting 5 seconds...`);
+                await wait(5000); // Wait 5 seconds before the next download
+            } catch (err) {
                 console.error(`Failed to fetch results for job ID ${job.job_id} (${job.source})`, err.response?.data?.message || err.message);
-                return null;
-            })
-        );
-
-        const downloadedResults = (await Promise.all(resultPromises)).filter(Boolean);
+            }
+        }
+        // --- END: The Second Fix ---
 
         for (const data of downloadedResults) {
             let mapped = [];
@@ -216,7 +217,6 @@ async function searchPriceApiCom(query) {
         return [];
     }
 }
-
 
 app.listen(PORT, () => {
     console.log(`Server is running! Open your browser to http://localhost:${PORT}`);
