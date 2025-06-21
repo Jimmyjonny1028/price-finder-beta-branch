@@ -13,14 +13,14 @@
 
     <div class="container">
         <h1>Smart Price Finder</h1>
-        <p class="subtitle">Search across stores to find the best deal on your next purchase.</p>
+        <p class="subtitle">Search across multiple stores to find the best deal on your next purchase.</p>
 
         <form id="search-form">
             <input type="text" id="search-input" placeholder="e.g., Sony WH-1000XM5 headphones" required>
             <button type="submit" id="search-button">Search</button>
         </form>
-
-        <!-- FEATURE 1: Filter & Sort Controls -->
+        
+        <!-- NEW: Filter & Sort Controls -->
         <div class="controls-container" id="controls-container" style="display: none;">
             <div class="control-group">
                 <label for="sort-select">Sort by:</label>
@@ -33,6 +33,7 @@
                 <label for="store-filter-select">Store:</label>
                 <select id="store-filter-select">
                     <option value="all">All Stores</option>
+                    <!-- Store options will be added here dynamically -->
                 </select>
             </div>
         </div>
@@ -43,6 +44,10 @@
         </div>
         
         <div id="results-container"></div>
+
+        <p class="disclaimer" style="text-align: center; color: #718096; font-size: 12px; margin-top: 20px;">
+            All prices are estimated in AUD and may include shipping.
+        </p>
     </div>
 
     <script src="script.js"></script>
