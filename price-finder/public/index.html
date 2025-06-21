@@ -13,14 +13,13 @@
 
     <div class="container">
         <h1>Smart Price Finder</h1>
-        <p class="subtitle">Search across multiple stores to find the best deal on your next purchase.</p>
+        <p class="subtitle">Search across stores to find the best deal on your next purchase.</p>
 
         <form id="search-form">
             <input type="text" id="search-input" placeholder="e.g., Sony WH-1000XM5 headphones" required>
             <button type="submit" id="search-button">Search</button>
         </form>
         
-        <!-- NEW: Filter & Sort Controls -->
         <div class="controls-container" id="controls-container" style="display: none;">
             <div class="control-group">
                 <label for="sort-select">Sort by:</label>
@@ -30,10 +29,17 @@
                 </select>
             </div>
             <div class="control-group">
+                <label for="condition-filter-select">Condition:</label>
+                <select id="condition-filter-select">
+                    <option value="all">All Conditions</option>
+                    <option value="new">New Only</option>
+                    <option value="refurbished">Refurbished Only</option>
+                </select>
+            </div>
+            <div class="control-group">
                 <label for="store-filter-select">Store:</label>
                 <select id="store-filter-select">
                     <option value="all">All Stores</option>
-                    <!-- Store options will be added here dynamically -->
                 </select>
             </div>
         </div>
@@ -48,6 +54,18 @@
         <p class="disclaimer" style="text-align: center; color: #718096; font-size: 12px; margin-top: 20px;">
             All prices are estimated in AUD and may include shipping.
         </p>
+    </div>
+
+    <button id="admin-button" title="Admin Panel">A</button>
+    <div id="admin-panel" class="modal-overlay">
+        <div class="modal-content">
+            <button id="close-admin-panel" class="close-button">×</button>
+            <h2>Traffic Stats</h2>
+            <p><strong>Total Searches:</strong> <span id="total-searches">0</span></p>
+            <p><strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
+            <h3>Recent Searches:</h3>
+            <ul id="search-history-list"></ul>
+        </div>
     </div>
 
     <script src="script.js"></script>
