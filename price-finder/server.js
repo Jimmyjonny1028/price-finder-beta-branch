@@ -1,4 +1,4 @@
-// server.js (DEFINITIVE FIX - Corrected Syntax, API Calls, and Image Handling)
+// server.js (DEFINITIVE FIX - Corrected API Jobs, Currency Filter, and Image Handling)
 
 const express = require('express');
 const axios = require('axios');
@@ -20,27 +20,27 @@ const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =================================================================
-// ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
+// ALL HELPER FUNCTIONS
 // =================================================================
 
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 
-// --- FIX: New robust function to clean and validate image URLs ---
 function formatImageUrl(url) {
     const placeholder = 'https://via.placeholder.com/150/F0F2F5/333333?text=No+Image';
-    if (!url || typeof url !== 'string') {
-        return placeholder;
-    }
-    // If URL starts with //, prepend https:
-    if (url.startsWith('//')) {
-        return `https:${url}`;
-    }
-    // If URL is missing http protocol, it's likely invalid, use placeholder
-    if (!url.startsWith('http')) {
+    if (!url || typeof url !== 'string' || !url.startsWith('http')) {
         return placeholder;
     }
     return url;
 }
+
+// --- NEW: Filter to ensure results are in AUD ---
+const filterByCurrency = (results) => {
+    // This regex looks for common foreign currency symbols.
+    const foreignCurrencyRegex = /[£€]/;
+    return results.filter(item => {
+        return item.price_string && !foreignCurrencyRegex.test(item.price_string);
+    });
+};
 
 const filterUbuyFromGoogle = (results) => { const ubuyStoreName = 'ubuy'; const googleShoppingSource = 'google shopping'; return results.filter(item => { const itemSource = item.source ? item.source.toLowerCase() : ''; const itemStore = item.store ? item.store.toLowerCase() : ''; if (itemSource.includes(googleShoppingSource) && itemStore.includes(ubuyStoreName)) { return false; } return true; }); };
 const filterForEnglish = (results) => { const isNotEnglishRegex = /[^\u0020-\u007E]/; return results.filter(item => !isNotEnglishRegex.test(item.title)); };
@@ -81,7 +81,10 @@ app.get('/search', async (req, res) => {
         let allResults = [...pricerResults, ...priceApiComResults].filter(item => item.price !== null && !isNaN(item.price));
         console.log(`Received ${allResults.length} initial valid results.`);
         
-        const filteredForUbuy = filterUbuyFromGoogle(allResults);
+        // --- APPLYING THE NEW FILTERING PIPELINE ---
+        const currencyFiltered = filterByCurrency(allResults);
+        console.log(`Kept ${currencyFiltered.length} results after currency filtering.`);
+        const filteredForUbuy = filterUbuyFromGoogle(currencyFiltered);
         const languageFiltered = filterForEnglish(filteredForUbuy);
 
         let finalFilteredResults;
@@ -114,30 +117,18 @@ app.get('/search', async (req, res) => {
 async function searchPricerAPI(query) {
     try {
         const regionalQuery = `${query} australia`;
-        const response = await axios.request({
-            method: 'GET', url: 'https://pricer.p.rapidapi.com/str',
-            params: { q: regionalQuery },
-            headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
-        });
-        return response.data.map(item => ({
-            source: 'Pricer',
-            title: item?.title || 'Title Not Found',
-            price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
-            price_string: item?.price || 'N/A',
-            url: cleanGoogleUrl(item?.link),
-            image: formatImageUrl(item?.img), // FIX: Format image URL
-            store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified'
-        }));
+        const response = await axios.request({ method: 'GET', url: 'https://pricer.p.rapidapi.com/str', params: { q: regionalQuery }, headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' } });
+        return response.data.map(item => ({ source: 'Pricer', title: item?.title || 'Title Not Found', price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null, price_string: item?.price || 'N/A', url: cleanGoogleUrl(item?.link), image: formatImageUrl(item?.img), store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified' }));
     } catch (err) { console.error("Pricer API search failed:", err.message); return []; }
 }
 
 async function searchPriceApiCom(query) {
     let allResults = [];
     try {
-        // --- FIX: Standardized all jobs to use 'search_results' and forced eBay to Australian domain ---
+        // --- FIX: Reverted jobs to their correct, original topics to prevent 400/500 errors. ---
         const jobsToSubmit = [
-            { source: 'amazon', topic: 'search_results', key: 'term', values: query },
-            { source: 'ebay', topic: 'search_results', key: 'term', values: query, domain: 'ebay.com.au' },
+            { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
+            { source: 'ebay', topic: 'search_results', key: 'term', values: query },
             { source: 'google shopping', topic: 'search_results', key: 'term', values: query }
         ];
 
@@ -162,37 +153,24 @@ async function searchPriceApiCom(query) {
         const downloadedResults = (await Promise.all(resultPromises)).filter(Boolean);
 
         for (const data of downloadedResults) {
-            // All jobs now use 'search_results', so we can simplify the parsing logic.
+            let mapped = [];
             const sourceName = data.source;
-            const searchResults = data.results?.[0]?.content?.search_results || [];
             
-            const mapped = searchResults.map(item => {
-                let price = null;
-                let price_string = 'N/A';
-                if (item.price) {
-                    price = parseFloat(item.price_with_shipping) || parseFloat(item.price);
-                    price_string = `$${parseFloat(item.price).toFixed(2)}`;
-                    const shipping = parseFloat(item.shipping_costs);
-                    if (shipping > 0) price_string += ` + $${shipping.toFixed(2)} ship`;
-                } else if (item.min_price) {
-                    price = parseFloat(item.min_price);
-                    price_string = `From $${price.toFixed(2)}`;
-                }
-
-                if (item.name && price !== null) {
-                    return {
-                        source: sourceName,
-                        title: item.name,
-                        price: price,
-                        price_string: price_string,
-                        url: item.url,
-                        image: formatImageUrl(item.img_url), // FIX: Format image URL
-                        store: item.shop_name || sourceName
-                    };
-                }
-                return null;
-            }).filter(Boolean);
-            
+            // --- FIX: Re-introduced separate parsing logic for different topics ---
+            if (data.topic === 'product_and_offers') {
+                const products = data.results?.[0]?.products || [];
+                mapped = products.map(item => ({ source: sourceName, title: item?.name, price: item?.price, price_string: item?.offer?.price_string || (item?.price ? `$${item.price.toFixed(2)}` : 'N/A'), url: item?.url, image: formatImageUrl(item?.image), store: item?.shop?.name || sourceName }));
+            } else if (data.topic === 'search_results') {
+                const searchResults = data.results?.[0]?.content?.search_results || [];
+                mapped = searchResults.map(item => {
+                    let price = null;
+                    let price_string = 'N/A';
+                    if (item.price) { price = parseFloat(item.price_with_shipping) || parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } 
+                    else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; }
+                    if (item.name && price !== null) return { source: sourceName, title: item.name, price: price, price_string: price_string, url: item.url, image: formatImageUrl(item.img_url), store: item.shop_name || sourceName };
+                    return null;
+                }).filter(Boolean);
+            }
             allResults = allResults.concat(mapped);
         }
         return allResults;
