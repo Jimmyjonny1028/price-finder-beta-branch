@@ -2,11 +2,13 @@ services:
   - type: web
     name: price-finder
     env: node
-    plan: free # Change this if you need more RAM
+    plan: free
+    # This command is essential. It installs npm packages AND Playwright's browsers.
     buildCommand: "npm install && npx playwright install --with-deps"
     startCommand: "node server.js"
     healthCheckPath: /
     envVars:
       - key: NODE_VERSION
-        value: 20 # Using a recent, stable Node version
+        value: 20
+      # Make sure you have created this Environment Group on the Render dashboard
       - fromGroup: price-finder-env
