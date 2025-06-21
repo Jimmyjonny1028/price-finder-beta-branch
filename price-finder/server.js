@@ -1,4 +1,4 @@
-// server.js (Original Pricer & PriceAPI.com - No Delays, No Source Labels)
+// server.js (Original Pricer & PriceAPI.com - No Delays)
 
 const express = require('express');
 const axios = require('axios');
@@ -14,7 +14,6 @@ app.use(express.static('public'));
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
 
-// This wait is still used by PriceAPI.com to wait for jobs to finish, but not between calls.
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const filterResultsByQuery = (results, query) => {
@@ -41,7 +40,6 @@ app.get('/search', async (req, res) => {
 
     console.log(`Starting multi-source search for: ${query}`);
     try {
-        // Calling the original two APIs in parallel
         const [pricerResults, priceApiComResults] = await Promise.all([
             searchPricerAPI(query),
             searchPriceApiCom(query)
@@ -89,12 +87,12 @@ async function searchPricerAPI(query) {
             headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
         });
         return response.data.map(item => ({
-            // "source" property is removed
+            source: 'Pricer API',
             title: item?.title || 'Title Not Found',
             price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null,
             price_string: item?.price || 'N/A',
             url: cleanGoogleUrl(item?.link),
-            image: item?.img || 'https://via.placeholder.com/100',
+            image: item?.img || 'https://via.placeholder.com/150',
             store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified'
         }));
     } catch (err) {
@@ -113,7 +111,6 @@ async function searchPriceApiCom(query) {
         ];
 
         console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com in parallel...`);
-        // Submitting jobs in parallel (no wait)
         const jobPromises = jobsToSubmit.map(job =>
             axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', max_pages: 1, ...job })
             .then(res => ({ ...res.data, source: job.source, topic: job.topic }))
@@ -147,12 +144,12 @@ async function searchPriceApiCom(query) {
             if (data.topic === 'product_and_offers') {
                 const products = data.results?.[0]?.products || [];
                 mapped = products.map(item => ({
-                    // "source" property is removed
+                    source: `PriceAPI (${sourceName})`,
                     title: item?.name || 'Title Not Found',
                     price: item?.price,
                     price_string: item?.offer?.price_string || (item?.price ? `$${item.price.toFixed(2)}` : 'N/A'),
                     url: item?.url || '#',
-                    image: item?.image || 'https://via.placeholder.com/100',
+                    image: item?.image || 'https://via.placeholder.com/150',
                     store: item?.shop?.name || sourceName
                 }));
             } else if (data.topic === 'search_results') {
@@ -173,12 +170,12 @@ async function searchPriceApiCom(query) {
 
                     if (item.name && price !== null) {
                         return {
-                            // "source" property is removed
+                            source: `PriceAPI (${sourceName})`,
                             title: item.name,
                             price: price,
                             price_string: price_string,
                             url: item.url || '#',
-                            image: item.img_url || 'https://via.placeholder.com/100',
+                            image: item.img_url || 'https://via.placeholder.com/150',
                             store: store
                         };
                     }
