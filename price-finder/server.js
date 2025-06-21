@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION - HINT AND STRICTLY FILTER)
+// server.js (FINAL INTELLIGENT VERSION)
 
 const express = require('express');
 const axios = require('axios');
@@ -26,6 +26,19 @@ const filterResultsByQuery = (results, query) => {
     });
 };
 
+// --- NEW, POWERFUL ANTI-ACCESSORY FILTER ---
+const filterForIrrelevantAccessories = (results) => {
+    const negativeKeywords = [
+        'strap', 'band', 'protector', 'case', 'charger', 'cable', 
+        'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide'
+    ];
+    return results.filter(item => {
+        const itemTitle = item.title.toLowerCase();
+        // Return true (keep the item) if NONE of the negative keywords are found in the title
+        return !negativeKeywords.some(keyword => itemTitle.includes(keyword));
+    });
+};
+
 app.get('/search', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Search query is required' });
@@ -40,22 +53,11 @@ app.get('/search', async (req, res) => {
         const allResults = [...pricerResults, ...priceApiComResults];
         console.log(`Received ${allResults.length} initial results from all sources.`);
 
-        // --- NEW, STRICT AUSTRALIAN SAFETY FILTER ---
-        const australianResults = allResults.filter(item => {
-            // Trust PriceAPI.com results implicitly because we set country='au'
-            if (item.source.startsWith('PriceAPI')) {
-                return true;
-            }
-            // For all other APIs, be very strict and require a .com.au URL
-            if (item.url && item.url.includes('.com.au')) {
-                return true;
-            }
-            // If neither condition is met, discard the result
-            return false;
-        });
-        console.log(`Kept ${australianResults.length} results after strict Australian filtering.`);
-
-        const filteredResults = filterResultsByQuery(australianResults, query);
+        // --- APPLY THE NEW IRRELEVANCE FILTER ---
+        const relevantResults = filterForIrrelevantAccessories(allResults);
+        console.log(`Kept ${relevantResults.length} results after accessory filtering.`);
+        
+        const filteredResults = filterResultsByQuery(relevantResults, query);
         console.log(`Kept ${filteredResults.length} results after keyword filtering.`);
 
         const validResults = filteredResults.filter(item => item.price !== null && !isNaN(item.price));
@@ -80,20 +82,16 @@ function cleanGoogleUrl(googleUrl) {
     }
 }
 
-// --- Pricer API Helper - REVERTED to "hint" method ---
 async function searchPricerAPI(query) {
     try {
-        // We add "australia" to the query as a HINT, not a demand.
         const regionalQuery = `${query} australia`;
         console.log(`Calling Pricer API with regional hint: "${regionalQuery}"`);
-        
         const response = await axios.request({
             method: 'GET',
             url: 'https://pricer.p.rapidapi.com/str',
             params: { q: regionalQuery },
             headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' }
         });
-
         return response.data.map(item => ({
             source: 'Pricer API',
             title: item.title || 'Title Not Found',
@@ -109,45 +107,43 @@ async function searchPricerAPI(query) {
     }
 }
 
-// --- PriceAPI.com Helper - Correctly set to Australia ---
+// --- UPGRADED API Helper 2: PriceAPI.com (Mixed Topics) ---
 async function searchPriceApiCom(query) {
-    const sources = ['amazon', 'google_shopping', 'ebay'];
     let allResults = [];
-
     try {
-        console.log(`Submitting jobs for AU sources: ${sources.join(', ')}`);
-        const jobPromises = sources.map(source => 
+        // Define the specific job for each source
+        const jobsToSubmit = [
+            // Use the more specific 'product_and_offers' for Amazon
+            { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
+            // Use the broader 'search_results' for eBay and Google Shopping
+            { source: 'ebay', topic: 'search_results', key: 'term', values: query },
+            { source: 'google_shopping', topic: 'search_results', key: 'term', values: query }
+        ];
+
+        console.log(`Submitting ${jobsToSubmit.length} jobs to PriceAPI.com...`);
+        const jobPromises = jobsToSubmit.map(job =>
             axios.post('https://api.priceapi.com/v2/jobs', {
                 token: PRICEAPI_COM_KEY,
-                source: source,
                 country: 'au',
-                topic: 'product_and_offers',
-                key: 'term',
-                values: query,
-                max_pages: 1
-            }).then(res => ({...res.data, source}))
+                max_pages: 1,
+                ...job // Spread the job-specific details
+            }).then(res => ({ ...res.data, source: job.source, topic: job.topic }))
             .catch(err => {
-                console.error(`Failed to submit job for source: ${source}`, err.response?.data?.message || err.message);
+                console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message);
                 return null;
             })
         );
         
         const jobResponses = (await Promise.all(jobPromises)).filter(Boolean);
-        const jobIds = jobResponses.map(job => job.job_id);
-
-        if (jobIds.length === 0) {
-            console.log("No jobs successfully submitted to PriceAPI.com.");
-            return [];
-        }
-        console.log(`Jobs submitted. IDs: ${jobIds.join(', ')}. Waiting for completion...`);
-
+        if (jobResponses.length === 0) return [];
+        
+        console.log(`Jobs submitted. IDs: ${jobResponses.map(j => j.job_id).join(', ')}. Waiting...`);
         await wait(30000);
 
         console.log("Fetching results for completed jobs...");
-        const resultPromises = jobResponses.map(job => 
-            axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, {
-                params: { token: PRICEAPI_COM_KEY }
-            }).then(res => ({...res.data, source: job.source}))
+        const resultPromises = jobResponses.map(job =>
+            axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } })
+            .then(res => ({ ...res.data, source: job.source, topic: job.topic }))
             .catch(err => {
                 console.error(`Failed to fetch results for job ID ${job.job_id} (${job.source})`, err.response?.data?.message || err.message);
                 return null;
@@ -157,17 +153,31 @@ async function searchPriceApiCom(query) {
         const downloadedResults = (await Promise.all(resultPromises)).filter(Boolean);
 
         for (const data of downloadedResults) {
-            const products = data.results && data.results[0] ? data.results[0].products || [] : [];
-            const mapped = products.map(item => ({
-                source: `PriceAPI (${data.source})`,
-                title: item.name || 'Title Not Found',
-                price: item.price,
-                price_string: item.offer?.price_string || (item.price ? `$${item.price.toFixed(2)}` : 'N/A'),
-                url: item.url || '#',
-                image: item.image || 'https://via.placeholder.com/100',
-                store: item.shop?.name || data.source.charAt(0).toUpperCase() + data.source.slice(1)
-            }));
-            allResults = allResults.concat(mapped);
+            let products = [];
+            // Handle the two different data structures
+            if (data.topic === 'product_and_offers') {
+                products = data.results[0]?.products || [];
+                const mapped = products.map(item => ({
+                    source: `PriceAPI (${data.source})`,
+                    title: item.name || 'Title Not Found', price: item.price,
+                    price_string: item.offer?.price_string || (item.price ? `$${item.price.toFixed(2)}` : 'N/A'),
+                    url: item.url || '#', image: item.image || 'https://via.placeholder.com/100',
+                    store: item.shop?.name || data.source
+                }));
+                allResults = allResults.concat(mapped);
+            } else if (data.topic === 'search_results') {
+                products = data.results || [];
+                const mapped = products.map(item => ({
+                    source: `PriceAPI (${data.source})`,
+                    title: item.search_result.name || 'Title Not Found',
+                    price: parseFloat(item.search_result.min_price) || null,
+                    price_string: item.search_result.min_price ? `$${item.search_result.min_price}` : 'N/A',
+                    url: item.search_result.url || '#',
+                    image: item.search_result.image_url || 'https://via.placeholder.com/100',
+                    store: data.source // The CSV doesn't specify a seller, so we use the source name
+                }));
+                allResults = allResults.concat(mapped);
+            }
         }
         console.log(`Retrieved ${allResults.length} results from PriceAPI.com sources.`);
         return allResults;
