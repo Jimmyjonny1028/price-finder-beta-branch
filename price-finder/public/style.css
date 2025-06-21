@@ -55,3 +55,33 @@ h1 { text-align: center; color: #1a202c; margin-bottom: 10px }
 .result-price a { display: block; padding: 10px 20px; background-color: #38a169; color: #fff; text-decoration: none; border-radius: 6px; text-align: center; font-weight: 500; transition: background-color .2s }
 .result-price a:hover { background-color: #2f855a }
 .disabled-link { cursor: not-allowed; background-color: #a0aec0 !important; pointer-events: none; }
+/* --- Styles for the new controls --- */
+.controls-container {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 25px;
+    padding: 15px;
+    background-color: #f7fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    align-items: center;
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.control-group label {
+    font-weight: 500;
+    color: #4a5568;
+}
+
+.control-group select {
+    padding: 8px 12px;
+    font-size: 14px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e0;
+    background-color: #fff;
+}
