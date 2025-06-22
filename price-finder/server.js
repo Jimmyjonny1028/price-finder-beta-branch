@@ -1,4 +1,4 @@
-// server.js (FINAL - With Queue Clearing on Disconnect)
+// server.js (FINAL, ERROR-FREE - Receiver & Job Queue Manager)
 
 const express = require('express');
 const cors = require('cors');
@@ -26,15 +26,10 @@ const jobQueue = [];
 let workerSocket = null;
 let isWorkerBusy = false;
 
-// =================================================================
-// WEBSOCKET SERVER
-// =================================================================
 const wss = new WebSocketServer({ server });
 
 function triggerNextJob() {
-    if (isWorkerBusy || jobQueue.length === 0 || !workerSocket) {
-        return;
-    }
+    if (isWorkerBusy || jobQueue.length === 0 || !workerSocket) { return; }
     isWorkerBusy = true;
     const nextQuery = jobQueue.shift();
     console.log(`Worker is free. Sending new job "${nextQuery}"...`);
@@ -43,45 +38,19 @@ function triggerNextJob() {
 
 wss.on('connection', (ws, req) => {
     const secret = req.headers['x-secret'];
-    if (secret !== SERVER_SIDE_SECRET) {
-        console.log("A client tried to connect with the wrong secret. Closing connection.");
-        ws.close();
-        return;
-    }
-
+    if (secret !== SERVER_SIDE_SECRET) { console.log("A client tried to connect with the wrong secret. Closing connection."); ws.close(); return; }
     console.log("✅ A trusted worker has connected.");
     workerSocket = ws;
     isWorkerBusy = false;
     triggerNextJob();
-
     ws.on('message', (message) => {
-        try {
-            const msg = JSON.parse(message);
-            if (msg.type === 'JOB_COMPLETE') {
-                console.log(`Worker has completed job for "${msg.query}". It is now free.`);
-                isWorkerBusy = false;
-                triggerNextJob();
-            }
+        try { const msg = JSON.parse(message); if (msg.type === 'JOB_COMPLETE') { console.log(`Worker has completed job for "${msg.query}". It is now free.`); isWorkerBusy = false; triggerNextJob(); }
         } catch (e) { console.error("Error parsing message from worker:", e); }
     });
-
-    ws.on('close', () => {
-        console.log("❌ The trusted worker has disconnected.");
-        workerSocket = null;
-        isWorkerBusy = true;
-        
-        // --- THIS IS THE CRITICAL FIX ---
-        jobQueue.length = 0; // Instantly clears the array
-        console.log("Job queue has been cleared due to worker disconnection.");
-        // ---------------------------------
-    });
-
+    ws.on('close', () => { console.log("❌ The trusted worker has disconnected."); workerSocket = null; isWorkerBusy = true; jobQueue.length = 0; console.log("Job queue has been cleared."); });
     ws.on('error', (error) => { console.error("WebSocket error:", error); });
 });
 
-// =================================================================
-// ALL HELPER FUNCTIONS (No changes needed)
-// =================================================================
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
 const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
@@ -92,9 +61,6 @@ const filterByPriceAnomalies = (results) => { if (results.length < 5) return res
 const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
 
-// =================================================================
-// MAIN ROUTES
-// =================================================================
 app.get('/search', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Search query is required' });
@@ -119,15 +85,12 @@ app.post('/submit-results', (req, res) => {
     if (isAccessorySearch) { finalFilteredResults = filterResultsByQuery(allResults, query); } 
     else { const accessoryFiltered = filterForIrrelevantAccessories(allResults); const mainDeviceFiltered = filterForMainDevice(accessoryFiltered); const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query); finalFilteredResults = filterByPriceAnomalies(queryFiltered); }
     const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price);
-    searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
+    const finalPayload = sortedResults.map(({ source, ...rest }) => rest);
+    searchCache.set(query.toLowerCase(), { results: finalPayload, timestamp: Date.now() });
     console.log(`SUCCESS: Cached ${sortedResults.length} filtered results for "${query}".`);
     res.status(200).send('Results cached successfully.');
 });
 
-app.post('/admin/traffic-data', (req, res) => {
-    const { code } = req.body;
-    if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); }
-    res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory });
-});
+app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory }); });
 
 server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
