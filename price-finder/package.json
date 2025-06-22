@@ -1,12 +1,13 @@
 {
-  "name": "price-finder",
+  "name": "price-finder-worker",
   "version": "1.0.0",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "description": "Local multi-site scraper for price finder",
+  "main": "local_scraper.js",
+  "scripts": { "start": "node local_scraper.js" },
   "dependencies": {
-    "cors": "^2.8.5",
+    "axios": "^1.7.2",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "playwright": "1.44.0",
     "ws": "^8.17.0"
   }
 }
