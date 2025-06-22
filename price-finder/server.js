@@ -1,4 +1,4 @@
-// server.js (FINAL, SYNTAX-ERROR-FREE - Receiver & Cache Server)
+// server.js (FINAL, ERROR-FREE - Receiver & Cache Server)
 
 const express = require('express');
 const cors = require('cors');
@@ -11,7 +11,7 @@ const PORT = 5000;
 const server = http.createServer(app);
 
 const searchCache = new Map();
-const CACHE_DURATION_MS = 60 * 60 * 1000;
+const CACHE_DURATION_MS = 60 * 60 * 1000; // Cache for 1 hour
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
 const MAX_HISTORY = 50;
 
@@ -23,7 +23,7 @@ const ADMIN_CODE = process.env.ADMIN_CODE;
 const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 
 // =================================================================
-// WEBSOCKET SERVER SETUP
+// WEBSOCKET SERVER SETUP - Listens for your local worker
 // =================================================================
 const wss = new WebSocketServer({ server });
 let workerSocket = null;
@@ -102,8 +102,6 @@ app.post('/submit-results', (req, res) => {
     const isAccessorySearch = detectSearchIntent(query);
     let allResults = results.map(item => ({ ...item, price: parseFloat(String(item.price_string || '').replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price));
     let finalFilteredResults;
-    
-    // --- THIS IS THE LINE THAT WAS PREVIOUSLY BROKEN AND IS NOW FIXED ---
     if (isAccessorySearch) {
         finalFilteredResults = filterResultsByQuery(allResults, query);
     } else {
@@ -112,7 +110,6 @@ app.post('/submit-results', (req, res) => {
         const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query);
         finalFilteredResults = filterByPriceAnomalies(queryFiltered);
     }
-    
     const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price);
     
     searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
@@ -126,5 +123,4 @@ app.post('/admin/traffic-data', (req, res) => {
     res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory });
 });
 
-// Use the http server to listen, not the express app
 server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
