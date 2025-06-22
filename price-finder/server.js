@@ -1,4 +1,56 @@
-// server.js (FINAL - Real-Time Job Queue with WebSockets)
+// server1000;
+const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
+const MAX_HISTORY = 50;
+
+app.use(express.json({ limit: '5mb' }));
+app.use(cors());
+app.use(express.static('public'));
+
+const ADMIN_CODE = process.env.ADMIN_CODE;
+const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
+
+// =================================================================
+// WEBSOCKET SERVER SETUP - Listens for your local worker
+// =================================================================
+const wss = new WebSocketServer({ server });
+let workerSocket = null;
+
+wss.on('connection', (ws, req) => {
+    const secret = req.headers['x-secret'];
+    if (secret !== SERVER_SIDE_SECRET) {
+        console.log("A client tried to connect with the wrong secret. Closing connection.");
+        ws.close();
+        return;
+    }
+    console.log("✅ A trusted worker has connected.");
+    workerSocket = ws;
+    ws.on('message', (message) => { console.log('Received message from worker:', message.toString()); });
+    ws.on('close', () => { console.log("❌ The trusted worker has disconnected."); workerSocket = null; });
+    ws.on('error', (error) => { console.error("WebSocket error:", error); });
+});
+
+// =================================================================
+// ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
+// =================================================================
+const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
+const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
+
+const detectItemCondition = (title) => {
+    const lowerCaseTitle = title.toLowerCase();
+    if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; }
+    return 'New';
+};
+
+function formatImageUrl(url) {
+    const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A';
+    if (!url || typeof url !== 'string') return placeholder;
+    if (url.startsWith('//')) return `https:${url}`;
+    if (!url.startsWith('http')) return placeholder;
+    return url;
+}
+
+const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
+const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits '.js (FINAL, NO DUPLICATES - Receiver & Cache Server)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,8 +60,6 @@ const { WebSocketServer } = require('ws');
 
 const app = express();
 const PORT = 5000;
-
-// --- Create an HTTP server to attach the WebSocket server to ---
 const server = http.createServer(app);
 
 const searchCache = new Map();
@@ -28,46 +78,48 @@ const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 // WEBSOCKET SERVER SETUP
 // =================================================================
 const wss = new WebSocketServer({ server });
-let workerSocket = null; // This will hold the connection to your local PC
+let workerSocket = null;
 
 wss.on('connection', (ws, req) => {
     const secret = req.headers['x-secret'];
-
     if (secret !== SERVER_SIDE_SECRET) {
         console.log("A client tried to connect with the wrong secret. Closing connection.");
         ws.close();
         return;
     }
-
     console.log("✅ A trusted worker has connected.");
     workerSocket = ws;
-
-    ws.on('message', (message) => {
-        console.log('Received message from worker:', message.toString());
-    });
-
-    ws.on('close', () => {
-        console.log("❌ The trusted worker has disconnected.");
-        workerSocket = null;
-    });
-
-    ws.on('error', (error) => {
-        console.error("WebSocket error:", error);
-    });
+    ws.on('message', (message) => { console.log('Received message from worker:', message.toString()); });
+    ws.on('close', () => { console.log("❌ The trusted worker has disconnected."); workerSocket = null; });
+    ws.on('error', (error) => { console.error("WebSocket error:", error); });
 });
 
 // =================================================================
-// ALL HELPER FUNCTIONS (No changes needed)
+// ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
 // =================================================================
-const ACCESSORY_KEYWORDS = [ /* ... */ ];
-const REFURBISHED_KEYWORDS = [ /* ... */ ];
-const detectItemCondition = (title) => { /* ... */ };
-function formatImageUrl(url) { /* ... */ }
-const filterForIrrelevantAccessories = (results) => { /* ... */ };
-const filterForMainDevice = (results) => { /* ... */ };
-const filterByPriceAnomalies = (results) => { /* ... */ };
-const filterResultsByQuery = (results, query) => { /* ... */ };
-const detectSearchIntent = (query) => { /* ... */ };
+const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
+const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
+
+const detectItemCondition = (title) => {
+    const lowerCaseTitle = title.toLowerCase();
+    if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; }
+    return 'New';
+};
+function formatImageUrl(url) {
+    const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A';
+    if (!url || typeof url !== 'string') return placeholder;
+    if (url.startsWith('//')) return `https:${url}`;
+    if (!url.startsWith('http')) return placeholder;
+    return url;
+}
+const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
+const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
+const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
+const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
+const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => query]; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
+const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
+const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
+const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
 
 // =================================================================
 // MAIN ROUTES
@@ -86,11 +138,9 @@ app.get('/search', async (req, res) => {
         }
     }
 
-    // --- NEW LOGIC: Send job to worker via WebSocket ---
     if (workerSocket && workerSocket.readyState === workerSocket.OPEN) {
         console.log(`Sending new job "${query}" to the local worker...`);
         workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: query }));
-        // Tell the user that the search is in progress
         return res.status(202).json({ message: "Search in progress. Please check back in a moment." });
     } else {
         console.log("No worker connected. Cannot process search.");
@@ -105,7 +155,7 @@ app.post('/submit-results', (req, res) => {
 
     console.log(`Received ${results.length} results for "${query}" from local worker.`);
     const isAccessorySearch = detectSearchIntent(query);
-    let allResults = results.map(item => ({ ...item, price: parseFloat(item.price_string.replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price));
+    let allResults = results.map(item => ({ ...item, price: parseFloat(String(item.price_string || '').replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price));
     let finalFilteredResults;
     if (isAccessorySearch) {
         finalFilteredResults = filterResultsByQuery(allResults, query);
@@ -122,17 +172,11 @@ app.post('/submit-results', (req, res) => {
     res.status(200).send('Results cached successfully.');
 });
 
-app.post('/admin/traffic-data', (req, res) => { /* ... */ });
+app.post('/admin/traffic-data', (req, res) => {
+    const { code } = req.body;
+    if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); }
+    res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory });
+});
 
-// Use the new http server to listen, not the express app
+// Use the http server to listen, not the express app
 server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
-
-// --- Full helper function definitions for completeness ---
-const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; } return 'New'; };
-function formatImageUrl(url) { const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!url || typeof url !== 'string') return placeholder; if (url.startsWith('//')) return `https:${url}`; if (!url.startsWith('http')) return placeholder; return url; }
-const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
-const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
-const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
-const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
-const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
-app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory }); });
