@@ -1,9 +1,9 @@
-// server.js (FINAL - Using ScraperAPI for Free, Stable Scraping)
+// server.js (FINAL - Scraper with API Fallback)
 
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const axios = require('axios'); // We use axios to make API requests
+const axios = require('axios');
 const cheerio = require('cheerio');
 
 const app = express();
@@ -20,6 +20,9 @@ app.use(express.static('public'));
 
 const ADMIN_CODE = process.env.ADMIN_CODE;
 const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY;
+const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY; // Needed for the fallback
+
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // =================================================================
 // ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
@@ -34,8 +37,9 @@ const filterByPriceAnomalies = (results) => { if (results.length < 5) return res
 const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
 
+
 // =================================================================
-// THE NEW SCRAPER - Powered by ScraperAPI
+// DATA SOURCE FUNCTIONS (Scraper and API Fallback)
 // =================================================================
 async function scrapeSingleGooglePage(url) {
     try {
@@ -54,16 +58,13 @@ async function scrapeSingleGooglePage(url) {
                 if (title && link && priceString) {
                     try {
                         const store = new URL(link).hostname.replace('www.', '');
-                        results.push({ title, price_string: priceString, store, url: link });
+                        results.push({ title, price_string: priceString, store, url: link, source: 'Google Scraper' });
                     } catch (e) { /* Ignore invalid links */ }
                 }
             }
         });
         return results;
-    } catch (error) {
-        console.error(`Failed to scrape page via proxy: ${error.message}`);
-        return [];
-    }
+    } catch (error) { console.error(`Failed to scrape page via proxy: ${error.message}`); return []; }
 }
 
 async function scrapeGoogleBroadSearch(query) {
@@ -80,14 +81,36 @@ async function scrapeGoogleBroadSearch(query) {
         console.log(`Scraping all ${pagesToScrape} pages in parallel via ScraperAPI...`);
         const allPageResults = await Promise.all(searchPromises);
         return allPageResults.flat();
-    } catch (error) {
-        console.error("The main scraping process failed:", error);
-        return [];
-    }
+    } catch (error) { console.error("The main scraping process failed:", error); return []; }
 }
 
+async function searchPriceApiCom(query) {
+    let allResults = [];
+    try {
+        const jobsToSubmit = [
+            { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query },
+            { source: 'ebay', topic: 'search_results', key: 'term', values: query, condition: 'any' },
+            { source: 'google_shopping', topic: 'search_results', key: 'term', values: query, condition: 'any' }
+        ];
+        const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) );
+        const jobResponses = (await Promise.all(jobPromises)).filter(Boolean);
+        if (jobResponses.length === 0) return [];
+        await wait(30000);
+        const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) );
+        const downloadedResults = (await Promise.all(resultPromises)).filter(Boolean);
+        for (const data of downloadedResults) {
+            let mapped = []; const sourceName = data.source;
+            if (data.topic === 'product_and_offers') { const products = data.results?.[0]?.products || []; mapped = products.map(item => ({ source: sourceName, title: item?.name || 'Title Not Found', price: item?.price, price_string: item?.offer?.price_string || (item?.price ? `$${item.price.toFixed(2)}` : 'N/A'), url: item?.url, image: item?.image, store: item?.shop?.name || sourceName }));
+            } else if (data.topic === 'search_results') { const searchResults = data.results?.[0]?.content?.search_results || []; mapped = searchResults.map(item => { let price = null; let price_string = 'N/A'; if (item.price) { price = parseFloat(item.price_with_shipping) || parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; } if (item.name && price !== null) return { source: sourceName, title: item.name, price: price, price_string: price_string, url: item.url, image: item.img_url, store: item.shop_name || sourceName }; return null; }).filter(Boolean); }
+            allResults = allResults.concat(mapped);
+        }
+        return allResults;
+    } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; }
+}
+
+
 // =================================================================
-// MAIN ROUTES
+// MAIN SEARCH ROUTE
 // =================================================================
 app.get('/search', async (req, res) => {
     const { query } = req.query;
@@ -100,8 +123,14 @@ app.get('/search', async (req, res) => {
     console.log(`Search Intent Detected: ${isAccessorySearch ? 'ACCESSORY' : 'MAIN PRODUCT'}`);
     try {
         let rawResults = await scrapeGoogleBroadSearch(query);
-        let allResults = rawResults.map(item => ({ ...item, price: parseFloat(item.price_string.replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(null) })).filter(item => !isNaN(item.price));
-        console.log(`Scraped ${allResults.length} initial valid results.`);
+
+        if (rawResults.length === 0) {
+            console.log("Scraper returned no results. Initiating API fallback...");
+            rawResults = await searchPriceApiCom(query);
+        }
+
+        let allResults = rawResults.map(item => ({ ...item, price: parseFloat(String(item.price_string || item.price).replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price));
+        console.log(`Processed ${allResults.length} initial valid results.`);
         let finalFilteredResults;
         if (isAccessorySearch) {
             finalFilteredResults = filterResultsByQuery(allResults, query);
