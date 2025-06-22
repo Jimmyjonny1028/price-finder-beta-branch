@@ -1,25 +1,64 @@
-// server.js (FINAL - Receiver & Cache Server)
+// server.js (FINAL - Real-Time Job Queue with WebSockets)
 
 const express = require('express');
-const cors =require('cors');
+const cors = require('cors');
 require('dotenv').config();
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const app = express();
 const PORT = 5000;
 
+// --- Create an HTTP server to attach the WebSocket server to ---
+const server = http.createServer(app);
+
 const searchCache = new Map();
-const CACHE_DURATION_MS = 60 * 60 * 1000; // Cache for 1 hour
+const CACHE_DURATION_MS = 60 * 60 * 1000;
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
 const MAX_HISTORY = 50;
 
-app.use(express.json({ limit: '5mb' })); // Increase payload limit for scraped data
+app.use(express.json({ limit: '5mb' }));
 app.use(cors());
 app.use(express.static('public'));
 
 const ADMIN_CODE = process.env.ADMIN_CODE;
-const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET; // The same secret as your Python script
+const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 
-// --- All the helper/filtering functions are the same ---
+// =================================================================
+// WEBSOCKET SERVER SETUP
+// =================================================================
+const wss = new WebSocketServer({ server });
+let workerSocket = null; // This will hold the connection to your local PC
+
+wss.on('connection', (ws, req) => {
+    const secret = req.headers['x-secret'];
+
+    if (secret !== SERVER_SIDE_SECRET) {
+        console.log("A client tried to connect with the wrong secret. Closing connection.");
+        ws.close();
+        return;
+    }
+
+    console.log("✅ A trusted worker has connected.");
+    workerSocket = ws;
+
+    ws.on('message', (message) => {
+        console.log('Received message from worker:', message.toString());
+    });
+
+    ws.on('close', () => {
+        console.log("❌ The trusted worker has disconnected.");
+        workerSocket = null;
+    });
+
+    ws.on('error', (error) => {
+        console.error("WebSocket error:", error);
+    });
+});
+
+// =================================================================
+// ALL HELPER FUNCTIONS (No changes needed)
+// =================================================================
 const ACCESSORY_KEYWORDS = [ /* ... */ ];
 const REFURBISHED_KEYWORDS = [ /* ... */ ];
 const detectItemCondition = (title) => { /* ... */ };
@@ -33,8 +72,6 @@ const detectSearchIntent = (query) => { /* ... */ };
 // =================================================================
 // MAIN ROUTES
 // =================================================================
-
-// This route ONLY checks the cache. It does no scraping.
 app.get('/search', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Search query is required' });
@@ -48,25 +85,25 @@ app.get('/search', async (req, res) => {
             return res.json(cachedData.results);
         }
     }
-    // If not in cache, tell the user.
-    console.log(`No cached results for "${query}".`);
-    res.json([]);
+
+    // --- NEW LOGIC: Send job to worker via WebSocket ---
+    if (workerSocket && workerSocket.readyState === workerSocket.OPEN) {
+        console.log(`Sending new job "${query}" to the local worker...`);
+        workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: query }));
+        // Tell the user that the search is in progress
+        return res.status(202).json({ message: "Search in progress. Please check back in a moment." });
+    } else {
+        console.log("No worker connected. Cannot process search.");
+        return res.status(503).json({ error: "Service is temporarily unavailable. The scraper is not connected." });
+    }
 });
 
-// NEW secret endpoint for your Python script to submit data
 app.post('/submit-results', (req, res) => {
     const { secret, query, results } = req.body;
+    if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); }
+    if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); }
 
-    if (secret !== SERVER_SIDE_SECRET) {
-        return res.status(403).send('Forbidden');
-    }
-    if (!query || !results) {
-        return res.status(400).send('Bad Request: Missing query or results.');
-    }
-
-    console.log(`Received ${results.length} results for "${query}" from local scraper.`);
-    
-    // Process and filter the submitted data exactly like we did before
+    console.log(`Received ${results.length} results for "${query}" from local worker.`);
     const isAccessorySearch = detectSearchIntent(query);
     let allResults = results.map(item => ({ ...item, price: parseFloat(item.price_string.replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price));
     let finalFilteredResults;
@@ -80,21 +117,15 @@ app.post('/submit-results', (req, res) => {
     }
     const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price);
     
-    // Cache the processed results
-    searchCache.set(query.toLowerCase(), {
-        results: sortedResults,
-        timestamp: Date.now()
-    });
-
+    searchCache.set(query.toLowerCase(), { results: sortedResults, timestamp: Date.now() });
     console.log(`SUCCESS: Cached ${sortedResults.length} filtered results for "${query}".`);
     res.status(200).send('Results cached successfully.');
 });
 
-// Admin panel route remains the same
 app.post('/admin/traffic-data', (req, res) => { /* ... */ });
 
-app.listen(PORT, () => console.log(`Server is running! Open your browser to http://localhost:${PORT}`));
-
+// Use the new http server to listen, not the express app
+server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
 
 // --- Full helper function definitions for completeness ---
 const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; } return 'New'; };
