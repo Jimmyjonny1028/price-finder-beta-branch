@@ -1,29 +1,34 @@
-// server.js (FINAL, STABLE - Multi-Site ScraperAPI with All Features)
-
+// server.js (FINAL, ERROR-FREE - Receiver & Job Queue Manager)
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const axios = require('axios');
-const cheerio = require('cheerio');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const app = express();
 const PORT = 5000;
+const server = http.createServer(app);
 
 const searchCache = new Map();
-const CACHE_DURATION_MS = 20 * 60 * 1000;
+const CACHE_DURATION_MS = 60 * 60 * 1000;
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
 const MAX_HISTORY = 50;
 
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '10mb' })); // Increased limit for more results
 app.use(cors());
 app.use(express.static('public'));
 
 const ADMIN_CODE = process.env.ADMIN_CODE;
-const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY;
+const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 
-// =================================================================
-// HELPER FUNCTIONS (No changes needed)
-// =================================================================
+const jobQueue = [];
+let workerSocket = null;
+let isWorkerBusy = false;
+
+const wss = new WebSocketServer({ server });
+
+function triggerNextJob() { if (isWorkerBusy || jobQueue.length === 0 || !workerSocket) { return; } isWorkerBusy = true; const nextQuery = jobQueue.shift(); console.log(`Worker is free. Sending new job "${nextQuery}"...`); workerSocket.send(JSON.stringify({ type: 'NEW_JOB', query: nextQuery })); }
+wss.on('connection', (ws, req) => { const secret = req.headers['x-secret']; if (secret !== SERVER_SIDE_SECRET) { console.log("A client tried to connect with the wrong secret."); ws.close(); return; } console.log("✅ A trusted worker has connected."); workerSocket = ws; isWorkerBusy = false; triggerNextJob(); ws.on('message', (message) => { try { const msg = JSON.parse(message); if (msg.type === 'JOB_COMPLETE') { console.log(`Worker has completed job for "${msg.query}". It is now free.`); isWorkerBusy = false; triggerNextJob(); } } catch (e) { console.error("Error parsing message from worker:", e); } }); ws.on('close', () => { console.log("❌ The trusted worker has disconnected."); workerSocket = null; isWorkerBusy = true; jobQueue.length = 0; console.log("Job queue has been cleared."); }); ws.on('error', (error) => { console.error("WebSocket error:", error); }); });
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
 const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); return REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword)) ? 'Refurbished' : 'New'; };
@@ -33,117 +38,7 @@ const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'com
 const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
 const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
-
-// =================================================================
-// THE NEW, STABLE SCRAPER FUNCTIONS (Powered by ScraperAPI)
-// =================================================================
-
-async function scrapeWithProxy(url) {
-    const proxyUrl = `http://api.scraperapi.com?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(url)}`;
-    const { data } = await axios.get(proxyUrl, { timeout: 45000 });
-    return cheerio.load(data);
-}
-
-async function scrapeGoogleShopping(query) {
-    try {
-        console.log("-> Scraping Google Shopping...");
-        const url = `https://www.google.com.au/search?tbm=shop&q=${encodeURIComponent(query)}&hl=en&gl=au`;
-        const $ = await scrapeWithProxy(url);
-        const results = [];
-        $('.sh-dgr__gr-auto').each((i, el) => {
-            const title = $(el).find('h3').text();
-            const priceString = $(el).find('.a8Pemb').text();
-            const store = $(el).find('.aULzUe').text();
-            const link = $(el).find('a').attr('href');
-            const image = $(el).find('img').attr('src');
-            if (title && priceString && store) results.push({ title, price_string: priceString, store, url: `https://google.com.au${link}`, image });
-        });
-        console.log(`-> Google Shopping OK: Found ${results.length} items.`);
-        return results;
-    } catch (e) { console.error(`-> Google Shopping FAILED: ${e.message}`); return []; }
-}
-
-async function scrapeEbayAU(query) {
-    try {
-        console.log("-> Scraping eBay AU...");
-        const url = `https://www.ebay.com.au/sch/i.html?_nkw=${encodeURIComponent(query)}`;
-        const $ = await scrapeWithProxy(url);
-        const results = [];
-        $('li.s-item').each((i, el) => {
-            const title = $(el).find('.s-item__title').text();
-            const priceString = $(el).find('.s-item__price').text();
-            const link = $(el).find('a').attr('href');
-            const image = $(el).find('.s-item__image-wrapper img').attr('src');
-            if (title && priceString && !title.toLowerCase().includes('shop with confidence')) results.push({ title, price_string: priceString, store: 'eBay', url: link, image });
-        });
-        console.log(`-> eBay AU OK: Found ${results.length} items.`);
-        return results;
-    } catch (e) { console.error(`-> eBay AU FAILED: ${e.message}`); return []; }
-}
-
-async function scrapeAmazonAU(query) {
-    try {
-        console.log("-> Scraping Amazon AU...");
-        const url = `https://www.amazon.com.au/s?k=${encodeURIComponent(query)}`;
-        const $ = await scrapeWithProxy(url);
-        const results = [];
-        $('div[data-cy="s-search-result"]').each((i, el) => {
-            const title = $(el).find('h2 a span').text();
-            const priceString = $(el).find('.a-price .a-offscreen').first().text();
-            const link = $(el).find('h2 a').attr('href');
-            const image = $(el).find('.s-image').attr('src');
-            if (title && priceString) results.push({ title, price_string: priceString, store: 'Amazon', url: `https://amazon.com.au${link}`, image });
-        });
-        console.log(`-> Amazon AU OK: Found ${results.length} items.`);
-        return results;
-    } catch (e) { console.error(`-> Amazon AU FAILED: ${e.message}`); return []; }
-}
-
-// =================================================================
-// MAIN SEARCH ROUTE
-// =================================================================
-app.get('/search', async (req, res) => {
-    const { query } = req.query;
-    if (!query) return res.status(400).json({ error: 'Search query is required' });
-    try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) {}
-    
-    const cacheKey = query.toLowerCase();
-    if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { console.log(`Serving results for "${query}" from CACHE!`); return res.json(cachedData.results); } }
-
-    console.log(`Starting multi-site scrape for: ${query}`);
-    const isAccessorySearch = detectSearchIntent(query);
-    
-    try {
-        const scraperPromises = [
-            scrapeGoogleShopping(query),
-            scrapeEbayAU(query),
-            scrapeAmazonAU(query)
-        ];
-        const allScraperResults = await Promise.all(scraperPromises);
-        let rawResults = allScraperResults.flat();
-        
-        console.log(`Scraping complete. Found ${rawResults.length} total raw results.`);
-        
-        let allResults = rawResults.map(item => ({ ...item, price: parseFloat(String(item.price_string || '').replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price));
-        let finalFilteredResults;
-        if (isAccessorySearch) {
-            finalFilteredResults = filterResultsByQuery(allResults, query);
-        } else {
-            const accessoryFiltered = filterForIrrelevantAccessories(allResults);
-            const mainDeviceFiltered = filterForMainDevice(accessoryFiltered);
-            const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query);
-            finalFilteredResults = filterByPriceAnomalies(queryFiltered);
-        }
-        
-        console.log(`Kept ${finalFilteredResults.length} final results after all filtering.`);
-        const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price);
-        
-        const finalPayload = sortedResults.map(({ source, ...rest }) => rest);
-        searchCache.set(cacheKey, { results: finalPayload, timestamp: Date.now() });
-        res.json(finalPayload);
-    } catch (error) { console.error("Error in the main search handler:", error); res.status(500).json({ error: 'Failed to fetch data from APIs' }); }
-});
-
+app.get('/search', async (req, res) => { const { query } = req.query; if (!query) return res.status(400).json({ error: 'Search query is required' }); try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) {} const cacheKey = query.toLowerCase(); if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { console.log(`Serving results for "${query}" from CACHE!`); return res.json(cachedData.results); } } if (workerSocket) { if (!jobQueue.includes(query)) { jobQueue.push(query); console.log(`Query "${query}" added to the job queue. Position: ${jobQueue.length}`); } else { console.log(`Query "${query}" is already in the queue.`); } triggerNextJob(); return res.status(202).json({ message: "Search is in the queue and will be processed by your local worker." }); } else { return res.status(503).json({ error: "Service is temporarily unavailable. The scraper worker is not connected." }); } });
+app.post('/submit-results', (req, res) => { const { secret, query, results } = req.body; if (secret !== SERVER_SIDE_SECRET) { return res.status(403).send('Forbidden'); } if (!query || !results) { return res.status(400).send('Bad Request: Missing query or results.'); } console.log(`Received ${results.length} results for "${query}" from local worker.`); const isAccessorySearch = detectSearchIntent(query); let allResults = results.map(item => ({ ...item, price: parseFloat(String(item.price_string || '').replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(item.image) })).filter(item => !isNaN(item.price)); let finalFilteredResults; if (isAccessorySearch) { finalFilteredResults = filterResultsByQuery(allResults, query); } else { const accessoryFiltered = filterForIrrelevantAccessories(allResults); const mainDeviceFiltered = filterForMainDevice(accessoryFiltered); const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query); finalFilteredResults = filterByPriceAnomalies(queryFiltered); } const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price); const finalPayload = sortedResults.map(({ source, ...rest }) => rest); searchCache.set(query.toLowerCase(), { results: finalPayload, timestamp: Date.now() }); console.log(`SUCCESS: Cached ${sortedResults.length} filtered results for "${query}".`); res.status(200).send('Results cached successfully.'); });
 app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory }); });
-
-app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
