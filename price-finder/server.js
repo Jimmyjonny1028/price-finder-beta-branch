@@ -1,4 +1,4 @@
-// server.js (FINAL, ERROR-FREE - Receiver & Job Queue Manager)
+// server.js (FINAL - With Queue Clearing on Disconnect)
 
 const express = require('express');
 const cors = require('cors');
@@ -11,7 +11,7 @@ const PORT = 5000;
 const server = http.createServer(app);
 
 const searchCache = new Map();
-const CACHE_DURATION_MS = 60 * 60 * 1000; // Cache for 1 hour
+const CACHE_DURATION_MS = 60 * 60 * 1000;
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
 const MAX_HISTORY = 50;
 
@@ -22,7 +22,6 @@ app.use(express.static('public'));
 const ADMIN_CODE = process.env.ADMIN_CODE;
 const SERVER_SIDE_SECRET = process.env.SERVER_SIDE_SECRET;
 
-// --- Job Queue System ---
 const jobQueue = [];
 let workerSocket = null;
 let isWorkerBusy = false;
@@ -49,6 +48,7 @@ wss.on('connection', (ws, req) => {
         ws.close();
         return;
     }
+
     console.log("✅ A trusted worker has connected.");
     workerSocket = ws;
     isWorkerBusy = false;
@@ -64,12 +64,23 @@ wss.on('connection', (ws, req) => {
             }
         } catch (e) { console.error("Error parsing message from worker:", e); }
     });
-    ws.on('close', () => { console.log("❌ The trusted worker has disconnected."); workerSocket = null; isWorkerBusy = true; });
+
+    ws.on('close', () => {
+        console.log("❌ The trusted worker has disconnected.");
+        workerSocket = null;
+        isWorkerBusy = true;
+        
+        // --- THIS IS THE CRITICAL FIX ---
+        jobQueue.length = 0; // Instantly clears the array
+        console.log("Job queue has been cleared due to worker disconnection.");
+        // ---------------------------------
+    });
+
     ws.on('error', (error) => { console.error("WebSocket error:", error); });
 });
 
 // =================================================================
-// HELPER FUNCTIONS
+// ALL HELPER FUNCTIONS (No changes needed)
 // =================================================================
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
