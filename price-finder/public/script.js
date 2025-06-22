@@ -1,4 +1,4 @@
-// public/script.js (FINAL - All Features with Job Queue Polling)
+// public/script.js (FINAL - All Features with Updated Loading Messages)
 
 const searchForm = document.getElementById('search-form');
 const searchInput = document.getElementById('search-input');
@@ -16,15 +16,15 @@ const conditionFilterSelect = document.getElementById('condition-filter-select')
 let fullResults = []; // This will hold the results from a successful search.
 let loadingInterval;  // This will manage the loading text animation.
 
-// --- Updated loading messages for the new, longer process ---
+// --- UPDATED: User-friendly loading messages ---
 const loadingMessages = [
-    "Sending your request to the job queue...",
-    "Your personal scraper is warming up...",
-    "Beginning the deep web scrape (this may take a minute)...",
-    "Analyzing search results from multiple pages...",
-    "Finding the best prices...",
-    "Compiling all the findings...",
-    "Just a little longer now, cleaning up the data..."
+    "Sending request to your personal scraper...",
+    "Searching Google Shopping & eBay...",
+    "Checking Amazon Australia...",
+    "Scanning other major retailers...",
+    "Compiling all the deals...",
+    "This may take a moment...",
+    "Almost finished..."
 ];
 
 // --- Event Listeners ---
@@ -66,7 +66,7 @@ async function handleSearch(event) {
         // Case 1: The job was sent to your PC worker. We need to start polling.
         if (response.status === 202) {
             loader.classList.add('polling'); // Add class to prevent hiding the loader
-            loaderText.textContent = "Job sent to your PC worker. Checking for results...";
+            loaderText.textContent = "Job sent. Checking for results...";
             pollForResults(searchTerm); // This function will now take over.
             return; 
         }
@@ -230,7 +230,7 @@ function renderResults(results) {
 }
 
 // =================================================================
-// ADMIN PANEL LOGIC (Unchanged)
+// ADMIN PANEL LOGIC
 // =================================================================
 const adminButton = document.getElementById('admin-button');
 const adminPanel = document.getElementById('admin-panel');
