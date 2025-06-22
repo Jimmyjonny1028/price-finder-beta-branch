@@ -30,7 +30,15 @@
     <div id="admin-panel" class="modal-overlay">
         <div class="modal-content">
             <button id="close-admin-panel" class="close-button">×</button>
-            <h2>Traffic Stats</h2>
+            <h2>Admin Panel</h2>
+            <div class="maintenance-controls">
+                <h4>Maintenance Mode</h4>
+                <p>Current Status: <strong id="maintenance-status">UNKNOWN</strong></p>
+                <button id="toggle-maintenance-button">Toggle Service</button>
+                <p class="small-text">Disables the search function for all users.</p>
+            </div>
+            <hr>
+            <h3>Traffic Stats</h3>
             <p><strong>Total Searches:</strong> <span id="total-searches">0</span></p>
             <p><strong>Unique Visitors:</strong> <span id="unique-visitors">0</span></p>
             <h3>Recent Searches:</h3>
