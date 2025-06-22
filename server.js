@@ -1,16 +1,17 @@
-// server.js (FINAL - No Duplicates, All Features)
+// server.js (FINAL - Faster Scraper with API Fallback)
 
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const { chromium } = require('playwright');
 const cheerio = require('cheerio');
+const axios = require('axios'); // We need axios again for the fallback
 
 const app = express();
 const PORT = 5000;
 
 const searchCache = new Map();
-const CACHE_DURATION_MS = 30 * 60 * 1000;
+const CACHE_DURATION_MS = 20 * 60 * 1000;
 const trafficLog = { totalSearches: 0, uniqueVisitors: new Set(), searchHistory: [] };
 const MAX_HISTORY = 50;
 
@@ -19,82 +20,46 @@ app.use(cors());
 app.use(express.static('public'));
 
 const ADMIN_CODE = process.env.ADMIN_CODE;
+// --- API Keys are needed again for the fallback ---
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+const PRICEAPI_COM_KEY = process.env.PRICEAPI_COM_KEY;
+
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- NEW: Configurable page count for scraping ---
+const PAGES_TO_SCRAPE = 10; // Reduced from 30 for much better speed
 
 // =================================================================
 // ALL HELPER FUNCTIONS - DEFINED ONLY ONCE
 // =================================================================
 const ACCESSORY_KEYWORDS = [ 'strap', 'band', 'protector', 'case', 'charger', 'cable', 'stand', 'dock', 'adapter', 'film', 'glass', 'cover', 'guide', 'replacement' ];
 const REFURBISHED_KEYWORDS = [ 'refurbished', 'renewed', 'pre-owned', 'preowned', 'used', 'open-box', 'as new' ];
-
-const detectItemCondition = (title) => {
-    const lowerCaseTitle = title.toLowerCase();
-    if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; }
-    return 'New';
-};
-
-function formatImageUrl(url) {
-    const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A';
-    if (!url || typeof url !== 'string') return placeholder;
-    if (url.startsWith('//')) return `https:${url}`;
-    if (!url.startsWith('http')) return placeholder;
-    return url;
-}
-
+const detectItemCondition = (title) => { const lowerCaseTitle = title.toLowerCase(); if (REFURBISHED_KEYWORDS.some(keyword => lowerCaseTitle.includes(keyword))) { return 'Refurbished'; } return 'New'; };
+function formatImageUrl(url) { const placeholder = 'https://via.placeholder.com/150/E2E8F0/A0AEC0?text=Image+N/A'; if (!url || typeof url !== 'string') return placeholder; if (url.startsWith('//')) return `https:${url}`; if (!url.startsWith('http')) return placeholder; return url; }
 const filterForIrrelevantAccessories = (results) => { return results.filter(item => !ACCESSORY_KEYWORDS.some(keyword => item.title.toLowerCase().includes(keyword))); };
 const filterForMainDevice = (results) => { const negativePhrases = ['for ', 'compatible with', 'fits ']; return results.filter(item => !negativePhrases.some(phrase => item.title.toLowerCase().includes(phrase))); };
 const filterByPriceAnomalies = (results) => { if (results.length < 5) return results; const prices = results.map(r => r.price).sort((a, b) => a - b); const mid = Math.floor(prices.length / 2); const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2; const priceThreshold = medianPrice * 0.20; console.log(`Median price is $${medianPrice.toFixed(2)}. Filtering out items cheaper than $${priceThreshold.toFixed(2)}.`); return results.filter(item => item.price >= priceThreshold); };
 const filterResultsByQuery = (results, query) => { const queryKeywords = query.toLowerCase().split(' ').filter(word => word.length > 0); if (queryKeywords.length === 0) return results; return results.filter(item => { const itemTitle = item.title.toLowerCase(); return queryKeywords.every(keyword => itemTitle.includes(keyword)); }); };
 const detectSearchIntent = (query) => { const queryLower = query.toLowerCase(); return ACCESSORY_KEYWORDS.some(keyword => queryLower.includes(keyword)); };
+function cleanGoogleUrl(googleUrl) { if (!googleUrl || !googleUrl.includes('?q=')) return googleUrl; try { const url = new URL(googleUrl); return url.searchParams.get('q') || googleUrl; } catch (e) { return googleUrl; } }
 
 // =================================================================
-// THE 30-PAGE PARALLEL SCRAPER
+// SCRAPER & API FUNCTIONS
 // =================================================================
-async function scrapeSingleGooglePage(url, browser) {
-    let page;
-    try {
-        page = await browser.newPage({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36', locale: 'en-AU' });
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-        await page.waitForSelector('#search', { timeout: 10000 });
-        const html = await page.content();
-        const $ = cheerio.load(html);
-        const results = [];
-        $('div.g').each((i, el) => {
-            const resultText = $(el).text();
-            if (resultText.includes('$')) {
-                const title = $(el).find('h3').text();
-                const link = $(el).find('a').attr('href');
-                const priceMatch = resultText.match(/\$\s?\d{1,3}(,\d{3})*(\.\d{2})?/);
-                const priceString = priceMatch ? priceMatch[0] : null;
-                if (title && link && priceString) {
-                    try {
-                        const store = new URL(link).hostname.replace('www.', '');
-                        results.push({ title, price_string: priceString, store, url: link });
-                    } catch (e) { /* Ignore invalid links */ }
-                }
-            }
-        });
-        return results;
-    } catch (error) {
-        console.error(`Failed to scrape page ${url}: ${error.message}`);
-        return [];
-    } finally {
-        if (page) await page.close();
-    }
-}
-
+async function scrapeSingleGooglePage(url, browser) { /* ... same as before ... */ }
 async function scrapeGoogleBroadSearch(query) {
     let browser = null;
     try {
         browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const searchPromises = [];
         const fullQuery = `buy ${query}`;
-        console.log("Generating URLs for 30 pages...");
-        for (let i = 0; i < 30; i++) {
+        console.log(`Generating URLs for ${PAGES_TO_SCRAPE} pages...`);
+        for (let i = 0; i < PAGES_TO_SCRAPE; i++) {
             const start = i * 10;
             const searchUrl = `https://www.google.com.au/search?q=${encodeURIComponent(fullQuery)}&start=${start}&gl=au&hl=en`;
             searchPromises.push(scrapeSingleGooglePage(searchUrl, browser));
         }
-        console.log("Scraping all 30 pages in parallel...");
+        console.log(`Scraping all ${PAGES_TO_SCRAPE} pages in parallel...`);
         const allPageResults = await Promise.all(searchPromises);
         return allPageResults.flat();
     } catch (error) {
@@ -105,8 +70,12 @@ async function scrapeGoogleBroadSearch(query) {
     }
 }
 
+// --- The API functions are back for fallback use ---
+async function searchPricerAPI(query) { /* ... same as before ... */ }
+async function searchPriceApiCom(query) { /* ... same as before ... */ }
+
 // =================================================================
-// MAIN ROUTES
+// MAIN SEARCH ROUTE - Now with Fallback Logic
 // =================================================================
 app.get('/search', async (req, res) => {
     const { query } = req.query;
@@ -114,13 +83,28 @@ app.get('/search', async (req, res) => {
     try { const visitorIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress; trafficLog.totalSearches++; trafficLog.uniqueVisitors.add(visitorIp); trafficLog.searchHistory.unshift({ query: query, timestamp: new Date().toISOString() }); if (trafficLog.searchHistory.length > MAX_HISTORY) { trafficLog.searchHistory.splice(MAX_HISTORY); } } catch (e) { console.error("Error logging traffic:", e); }
     const cacheKey = query.toLowerCase();
     if (searchCache.has(cacheKey)) { const cachedData = searchCache.get(cacheKey); if (Date.now() - cachedData.timestamp < CACHE_DURATION_MS) { console.log(`Serving results for "${query}" from CACHE!`); return res.json(cachedData.results); } }
-    console.log(`Starting 30-page broad scrape for: ${query}`);
+
     const isAccessorySearch = detectSearchIntent(query);
     console.log(`Search Intent Detected: ${isAccessorySearch ? 'ACCESSORY' : 'MAIN PRODUCT'}`);
+
     try {
+        console.log(`Attempting primary data source: ${PAGES_TO_SCRAPE}-page web scrape...`);
         let rawResults = await scrapeGoogleBroadSearch(query);
         let allResults = rawResults.map(item => ({ ...item, price: parseFloat(item.price_string.replace(/[^0-9.]/g, '')), condition: detectItemCondition(item.title), image: formatImageUrl(null) })).filter(item => !isNaN(item.price));
-        console.log(`Scraped ${allResults.length} initial valid results.`);
+        console.log(`Scraper returned ${allResults.length} initial valid results.`);
+
+        // --- THE FALLBACK LOGIC ---
+        if (allResults.length === 0) {
+            console.log("Scraper returned no results. Initiating API fallback...");
+            const [pricerResults, priceApiComResults] = await Promise.all([
+                searchPricerAPI(query),
+                searchPriceApiCom(query)
+            ]);
+            allResults = [...pricerResults, ...priceApiComResults].filter(item => item.price !== null && !isNaN(item.price));
+            console.log(`API Fallback returned ${allResults.length} results.`);
+        }
+        
+        // --- Full Filtering Pipeline (runs on either scraper or API data) ---
         let finalFilteredResults;
         if (isAccessorySearch) {
             finalFilteredResults = filterResultsByQuery(allResults, query);
@@ -130,8 +114,10 @@ app.get('/search', async (req, res) => {
             const queryFiltered = filterResultsByQuery(mainDeviceFiltered, query);
             finalFilteredResults = filterByPriceAnomalies(queryFiltered);
         }
+        
         console.log(`Kept ${finalFilteredResults.length} final results after all filtering.`);
         const sortedResults = finalFilteredResults.sort((a, b) => a.price - b.price);
+        
         searchCache.set(cacheKey, { results: sortedResults, timestamp: Date.now() });
         res.json(sortedResults);
     } catch (error) {
@@ -140,10 +126,13 @@ app.get('/search', async (req, res) => {
     }
 });
 
-app.post('/admin/traffic-data', (req, res) => {
-    const { code } = req.body;
-    if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); }
-    res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory });
-});
+// Admin panel route
+app.post('/admin/traffic-data', (req, res) => { const { code } = req.body; if (!code || code !== ADMIN_CODE) { return res.status(403).json({ error: 'Forbidden' }); } res.json({ totalSearches: trafficLog.totalSearches, uniqueVisitors: trafficLog.uniqueVisitors.size, searchHistory: trafficLog.searchHistory }); });
 
 app.listen(PORT, () => console.log(`Server is running! Open your browser to http://localhost:${PORT}`));
+
+
+// --- Full definitions for all helper functions for completeness ---
+async function scrapeSingleGooglePage(url, browser) { let page; try { page = await browser.newPage({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36', locale: 'en-AU' }); await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }); await page.waitForSelector('#search', { timeout: 10000 }); const html = await page.content(); const $ = cheerio.load(html); const results = []; $('div.g').each((i, el) => { const resultText = $(el).text(); if (resultText.includes('$')) { const title = $(el).find('h3').text(); const link = $(el).find('a').attr('href'); const priceMatch = resultText.match(/\$\s?\d{1,3}(,\d{3})*(\.\d{2})?/); const priceString = priceMatch ? priceMatch[0] : null; if (title && link && priceString) { try { const store = new URL(link).hostname.replace('www.', ''); results.push({ title, price_string: priceString, store, url: link }); } catch (e) {} } } }); return results; } catch (error) { console.error(`Failed to scrape page ${url}: ${error.message}`); return []; } finally { if (page) await page.close(); } }
+async function searchPricerAPI(query) { try { const regionalQuery = `${query} australia`; const response = await axios.request({ method: 'GET', url: 'https://pricer.p.rapidapi.com/str', params: { q: regionalQuery }, headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': 'pricer.p.rapidapi.com' } }); return response.data.map(item => ({ source: 'Pricer', title: item?.title || 'Title Not Found', price: item?.price ? parseFloat(String(item.price).replace(/[^0-9.]/g, '')) : null, price_string: item?.price || 'N/A', url: cleanGoogleUrl(item?.link), image: formatImageUrl(item?.img), store: item?.shop ? item.shop.replace(' from ', '') : 'Seller Not Specified', condition: detectItemCondition(item?.title || '') })); } catch (err) { console.error("Pricer API search failed:", err.message); return []; } }
+async function searchPriceApiCom(query) { let allResults = []; try { const jobsToSubmit = [ { source: 'amazon', topic: 'product_and_offers', key: 'term', values: query }, { source: 'ebay', topic: 'search_results', key: 'term', values: query, condition: 'any' }, { source: 'google_shopping', topic: 'search_results', key: 'term', values: query, condition: 'any' } ]; const jobPromises = jobsToSubmit.map(job => axios.post('https://api.priceapi.com/v2/jobs', { token: PRICEAPI_COM_KEY, country: 'au', ...job }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to submit job for source: ${job.source}`, err.response?.data?.message || err.message); return null; }) ); const jobResponses = (await Promise.all(jobPromises)).filter(Boolean); if (jobResponses.length === 0) return []; await wait(30000); const resultPromises = jobResponses.map(job => axios.get(`https://api.priceapi.com/v2/jobs/${job.job_id}/download.json`, { params: { token: PRICEAPI_COM_KEY } }).then(res => ({ ...res.data, source: job.source, topic: job.topic })).catch(err => { console.error(`Failed to fetch results for job ID ${job.job_id}`, err.response?.data?.message || err.message); return null; }) ); const downloadedResults = (await Promise.all(resultPromises)).filter(Boolean); for (const data of downloadedResults) { let mapped = []; const sourceName = data.source; if (data.topic === 'product_and_offers') { const products = data.results?.[0]?.products || []; mapped = products.map(item => ({ source: sourceName, title: item?.name || 'Title Not Found', price: item?.price, price_string: item?.offer?.price_string || (item?.price ? `$${item.price.toFixed(2)}` : 'N/A'), url: item?.url, image: formatImageUrl(item?.image), store: item?.shop?.name || sourceName, condition: detectItemCondition(item?.name || '') })); } else if (data.topic === 'search_results') { const searchResults = data.results?.[0]?.content?.search_results || []; mapped = searchResults.map(item => { let price = null; let price_string = 'N/A'; if (item.price) { price = parseFloat(item.price_with_shipping) || parseFloat(item.price); price_string = item.price_string || `$${parseFloat(item.price).toFixed(2)}`; } else if (item.min_price) { price = parseFloat(item.min_price); price_string = `From $${price.toFixed(2)}`; } if (item.name && price !== null) return { source: sourceName, title: item.name, price: price, price_string: price_string, url: item.url, image: formatImageUrl(item.img_url), store: item.shop_name || sourceName, condition: detectItemCondition(item.name || (item.condition_text || '')) }; return null; }).filter(Boolean); } allResults = allResults.concat(mapped); } return allResults; } catch (err) { console.error("A critical error occurred in the searchPriceApiCom function:", err.message); return []; } }
