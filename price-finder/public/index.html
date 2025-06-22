@@ -10,16 +10,13 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
     <div class="container">
         <h1>Smart Price Finder</h1>
-        <p class="subtitle">Search across stores to find the best deal on your next purchase.</p>
-
+        <p class="subtitle">Search the web to find the best deal on your next purchase.</p>
         <form id="search-form">
             <input type="text" id="search-input" placeholder="e.g., Sony WH-1000XM5 headphones" required>
             <button type="submit" id="search-button">Search</button>
         </form>
-        
         <div class="controls-container" id="controls-container" style="display: none;">
             <div class="control-group">
                 <label for="sort-select">Sort by:</label>
@@ -43,19 +40,15 @@
                 </select>
             </div>
         </div>
-
         <div id="loader" class="hidden">
             <div class="spinner"></div>
-            <p>Searching multiple providers...</p> 
+            <p>Searching the web...</p> 
         </div>
-        
         <div id="results-container"></div>
-
         <p class="disclaimer" style="text-align: center; color: #718096; font-size: 12px; margin-top: 20px;">
-            All prices are estimated in AUD and may include shipping.
+            All prices are estimated in AUD. Results may include affiliate links.
         </p>
     </div>
-
     <button id="admin-button" title="Admin Panel">A</button>
     <div id="admin-panel" class="modal-overlay">
         <div class="modal-content">
@@ -67,7 +60,6 @@
             <ul id="search-history-list"></ul>
         </div>
     </div>
-
     <script src="script.js"></script>
 </body>
 </html>
